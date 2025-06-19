@@ -184,7 +184,7 @@ def train_fdn_on_iris(model, epochs=500, lr=1e-3, print_every=50, plot=True, see
 
 # ---- Main ---- #
 if __name__ == "__main__":
-    from models.fdnet import FDNNetwork  # adjust import path as needed
+    from models.fdnet import IC_FDNetwork, LP_FDNetwork  # adjust import path as needed
     from models.hypernet import HyperNetwork
     from models.bayesnet import BayesNetwork
     input_dim = 4
@@ -196,10 +196,12 @@ if __name__ == "__main__":
     if seed is not None:
         set_seed(seed=seed)
 
-    network = 'BayesNet'
+    network = 'LP_FDNet'
 
-    if network == 'FDNet':
-        model = FDNNetwork(input_dim, hidden_dim, output_dim, hyper_hidden_dim)
+    if network == 'IC_FDNet':
+        model = IC_FDNetwork(input_dim, hidden_dim, output_dim, hyper_hidden_dim)
+    elif network == 'LP_FDNet':
+        model = LP_FDNetwork(input_dim, hidden_dim, output_dim, hyper_hidden_dim)
     elif network == 'HyperNet':
         model = HyperNetwork(input_dim, hidden_dim, output_dim, hyper_hidden_dim)
     elif network == 'BayesNet':
