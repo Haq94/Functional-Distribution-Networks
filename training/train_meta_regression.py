@@ -197,6 +197,7 @@ if __name__ == "__main__":
     from models.fdnet import LP_FDNetwork, IC_FDNetwork
     from models.hypernet import HyperNetwork
     from models.bayesnet import BayesNetwork
+    from models.gausshypernet import GaussianHyperNetwork
     input_dim = 10
     epochs = 4000
     print_every = 100
@@ -213,6 +214,8 @@ if __name__ == "__main__":
         model = HyperNetwork(input_dim=input_dim, hidden_dim=32, output_dim=input_dim, hyper_hidden_dim=64)
     elif model_type == 'BayesNet':
         model = BayesNetwork(input_dim, hidden_dim=32, output_dim=input_dim, prior_std=1.0)
+    elif model_type == 'GaussHyperNet':
+        model = GaussianHyperNetwork(input_dim, hidden_dim=32, output_dim=input_dim, latent_dim=10, prior_std=1.0)
     train_meta_regression(model=model, 
                           x_c=x_c, y_c=y_c, x_t=x_t, y_t=y_t, desc=desc, 
                           sample=sample, seed=seed, epochs=epochs, print_every=print_every)
