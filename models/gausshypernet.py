@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from utils.kl_divergence import compute_kl_divergence
 
 class GaussianHyperLayer(nn.Module):
-    def __init__(self, input_dim, output_dim, latent_dim=10, prior_std=1.0):
+    def __init__(self, input_dim, output_dim, hyper_hidden_dim, latent_dim=10, prior_std=1.0):
         super().__init__()
         self.input_dim = input_dim
         self.output_dim = output_dim
@@ -15,9 +15,9 @@ class GaussianHyperLayer(nn.Module):
 
         # The hypernetwork generates μ and log σ for weights and biases
         self.hypernet = nn.Sequential(
-            nn.Linear(latent_dim, 64),
+            nn.Linear(latent_dim, hyper_hidden_dim),
             nn.ReLU(),
-            nn.Linear(64, 2 * (self.weight_dim + self.bias_dim))  # [w_mu, w_logσ, b_mu, b_logσ]
+            nn.Linear(hyper_hidden_dim, 2 * (self.weight_dim + self.bias_dim))  # [w_mu, w_logσ, b_mu, b_logσ]
         )
 
         self.latent = nn.Parameter(torch.randn(latent_dim))  # Fixed latent vector
@@ -51,10 +51,10 @@ class GaussianHyperLayer(nn.Module):
             return out
 
 class GaussianHyperNetwork(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, latent_dim=10, prior_std=1.0):
+    def __init__(self, input_dim, hidden_dim, output_dim, hyper_hidden_dim, latent_dim=10, prior_std=1.0):
         super().__init__()
-        self.layer1 = GaussianHyperLayer(input_dim, hidden_dim, latent_dim, prior_std)
-        self.layer2 = GaussianHyperLayer(hidden_dim, output_dim, latent_dim, prior_std)
+        self.layer1 = GaussianHyperLayer(input_dim, hidden_dim, hyper_hidden_dim, latent_dim, prior_std)
+        self.layer2 = GaussianHyperLayer(hidden_dim, output_dim, hyper_hidden_dim, latent_dim, prior_std)
 
     def forward(self, x, return_kl=False, sample=True):
         x, kl1 = self.layer1(x, return_kl=return_kl, sample=sample) if return_kl else (self.layer1(x, sample=sample), 0.0)

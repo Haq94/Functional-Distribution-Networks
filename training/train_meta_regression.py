@@ -140,9 +140,11 @@ def train_meta_regression(
         model.train()
         optimizer.zero_grad()
 
-        if isinstance(model, LP_FDNetwork) or isinstance(model, IC_FDNetwork) or isinstance(model, BayesNetwork):
+        if isinstance(model, LP_FDNetwork) or isinstance(model, IC_FDNetwork) or isinstance(model, BayesNetwork) or isinstance(model, GaussianHyperNetwork):
             outputs = model(x_c, return_kl=True)
-        elif isinstance(model, HyperNetwork):
+        elif isinstance(model, HyperNetwork) or isinstance(model, MLPNetwork):
+            outputs = model(x_c)
+        elif isinstance(model, DeepEnsembleNetwork):
             outputs = model(x_c)
         else:
             print("Unknown model type.")
@@ -176,9 +178,11 @@ def train_meta_regression(
     preds = []
     
     with torch.no_grad():
-        if isinstance(model, IC_FDNetwork) or isinstance(model, LP_FDNetwork) or isinstance(model, BayesNetwork):
+        if isinstance(model, IC_FDNetwork) or isinstance(model, LP_FDNetwork) or isinstance(model, BayesNetwork) or isinstance(model, GaussianHyperNetwork):
             preds = [model(x_t, sample=sample).cpu().numpy() for _ in range(num_samples)]
-        elif isinstance(model, HyperNetwork):
+        elif isinstance(model, HyperNetwork) or isinstance(model, MLPNetwork):
+            preds = [model(x_t).cpu().numpy() for _ in range(num_samples)]
+        elif isinstance(model, DeepEnsembleNetwork):
             preds = [model(x_t).cpu().numpy() for _ in range(num_samples)]
         # for _ in range(num_samples):
         #     y_sample = model(x_t)
@@ -198,12 +202,14 @@ if __name__ == "__main__":
     from models.hypernet import HyperNetwork
     from models.bayesnet import BayesNetwork
     from models.gausshypernet import GaussianHyperNetwork
+    from models.mlpnet import MLPNetwork, DeepEnsembleNetwork
     input_dim = 10
     epochs = 4000
     print_every = 100
     sample = True
-    seed=2132
-    model_type = 'LP_FDNet'
+    seed=None
+    model_type = 'DeepEnsembleNet'
+    # model_type = 'IC_FDNet'
     # One task: context + target
     x_c, y_c, x_t, y_t, desc = generate_meta_task(n_context=input_dim, n_target=input_dim, seed=seed)
     if model_type == 'LP_FDNet':
@@ -213,9 +219,16 @@ if __name__ == "__main__":
     elif model_type == 'HyperNet':
         model = HyperNetwork(input_dim=input_dim, hidden_dim=32, output_dim=input_dim, hyper_hidden_dim=64)
     elif model_type == 'BayesNet':
-        model = BayesNetwork(input_dim, hidden_dim=32, output_dim=input_dim, prior_std=1.0)
+        model = BayesNetwork(input_dim=input_dim, hidden_dim=32, output_dim=input_dim, prior_std=1.0)
     elif model_type == 'GaussHyperNet':
-        model = GaussianHyperNetwork(input_dim, hidden_dim=32, output_dim=input_dim, latent_dim=10, prior_std=1.0)
+        model = GaussianHyperNetwork(input_dim=input_dim, hidden_dim=32, output_dim=input_dim, hyper_hidden_dim=64, latent_dim=10, prior_std=1.0)
+    elif model_type == 'MLPNet':
+        model = MLPNetwork(input_dim, hidden_dim=32, output_dim=input_dim)
+    elif model_type == 'DeepEnsembleNet':
+        model = DeepEnsembleNetwork(input_dim, hidden_dim=32, output_dim=input_dim)
     train_meta_regression(model=model, 
                           x_c=x_c, y_c=y_c, x_t=x_t, y_t=y_t, desc=desc, 
                           sample=sample, seed=seed, epochs=epochs, print_every=print_every)
+
+
+

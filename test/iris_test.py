@@ -187,6 +187,7 @@ if __name__ == "__main__":
     from models.fdnet import IC_FDNetwork, LP_FDNetwork  # adjust import path as needed
     from models.hypernet import HyperNetwork
     from models.bayesnet import BayesNetwork
+    from models.gausshypernet import GaussianHyperNetwork
     input_dim = 4
     hidden_dim = 32
     output_dim = 3  # 3 Iris classes
@@ -196,7 +197,7 @@ if __name__ == "__main__":
     if seed is not None:
         set_seed(seed=seed)
 
-    network = 'LP_FDNet'
+    network = 'GaussHyperNet'
 
     if network == 'IC_FDNet':
         model = IC_FDNetwork(input_dim, hidden_dim, output_dim, hyper_hidden_dim)
@@ -206,6 +207,8 @@ if __name__ == "__main__":
         model = HyperNetwork(input_dim, hidden_dim, output_dim, hyper_hidden_dim)
     elif network == 'BayesNet':
         model = BayesNetwork(input_dim, hidden_dim, output_dim)
+    elif network == 'GaussHyperNet':
+        model = GaussianHyperNetwork(input_dim, hidden_dim, output_dim, hyper_hidden_dim)
 
     train_fdn_on_iris(model, seed=seed)
 
