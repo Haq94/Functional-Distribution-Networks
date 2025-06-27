@@ -1,63 +1,86 @@
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class MLPNetwork(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim):
+class DeterministicMLPNetwork(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim, dropout_rate=0.0):
         super().__init__()
         self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, output_dim)
+        self.dropout = nn.Dropout(p=dropout_rate)
+        self.use_dropout = dropout_rate > 0.0
 
     def forward(self, x):
-        x = F.relu(self.fc1(x))
-        return self.fc2(x)
-    
-class DeepEnsembleNetwork(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, num_models=5):
-        super().__init__()
-        self.models = nn.ModuleList([
-            MLPNetwork(input_dim, hidden_dim, output_dim)
-            for _ in range(num_models)
-        ])
-
-    def forward(self, x):
-        """
-        Returns: (mean_prediction, std_prediction)
-        """
-        preds = torch.stack([model(x) for model in self.models], dim=0)  # [E, B]
-        mean = preds.mean(dim=0)  # [B]
-        std = preds.std(dim=0)    # [B]
-        return mean
-
-def train_deep_ensemble(ensemble, x_train, y_train, num_epochs=500, lr=1e-3):
-    criterion = nn.MSELoss()
-    for idx, model in enumerate(ensemble.models):
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-        for epoch in range(num_epochs):
-            model.train()
-            pred = model(x_train)
-            loss = criterion(pred, y_train)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+        x = self.fc1(x)
+        x = F.relu(x)
+        if self.use_dropout:
+            x = self.dropout(x)
+        return self.fc2(x).squeeze(-1)
 
 
-if __name__ == "__main__":
-    # Example dimensions
-    input_dim = 10
-    hidden_dim = 64
-    output_dim = 1
-    num_ensemble = 5
+# class DeepEnsembleNetwork(nn.Module):
+#     def __init__(self, network_class, num_models=5, seed_list=None, *net_args, **net_kwargs):
+#         """
+#         Args:
+#             network_class: Class of the network to ensemble (e.g., DeterministicMLPNetwork)
+#             num_models: Number of ensemble members
+#             seed_list: Optional list of seeds, one per model (length == num_models)
+#             *net_args: Positional args for each network constructor
+#             **net_kwargs: Keyword args for each network constructor
+#         """
+#         super().__init__()
 
-    # Data
-    x_train = torch.randn(32, input_dim)
-    y_train = torch.sin(x_train[:, 0])  # Example target
+#         if seed_list is not None and len(seed_list) != num_models:
+#             raise ValueError("seed_list must be the same length as num_models")
 
-    # Train and evaluate
-    ensemble = DeepEnsembleNetwork(input_dim, hidden_dim, output_dim, num_models=num_ensemble)
-    train_deep_ensemble(ensemble, x_train, y_train)
+#         self.models = nn.ModuleList()
+#         for i in range(num_models):
+#             if seed_list is not None:
+#                 torch.manual_seed(seed_list[i])
+#             self.models.append(network_class(*net_args, **net_kwargs))
 
-    ensemble.eval()
-    with torch.no_grad():
-        mean_pred, std_pred = ensemble(x_train)
 
+#     def forward(self, x, mc_samples=1):
+#         preds = []
+#         for model in self.models:
+#             if mc_samples>0:
+#                 # Monte Carlo sampling if model has stochasticity (e.g., Dropout)
+#                 single_model_preds = [model(x) for _ in range(mc_samples)]
+#                 preds.extend(single_model_preds)
+#             else:
+#                 preds.append(model(x))
+        
+#         preds = torch.stack(preds, dim=0)  # [E * S, B]
+
+#         return preds.mean(dim=0), preds.std(dim=0)
+
+
+# if __name__=='__main__':
+#     # Example dimensions
+#     input_dim = 10
+#     hidden_dim = 64
+#     output_dim = 1
+#     num_models = 5
+
+#     mc_samples = 3
+#     num_epochs = 100
+#     lr=0.01
+
+#     # Data
+#     x_train = torch.randn(32, input_dim)
+#     y_train = torch.sin(x_train[:, 0])  # Example target
+#     seed_list = [0, 1, 2, 3, 4]
+#     ensemble = DeepEnsembleNetwork(network_class=DeterministicMLPNetwork, num_models=num_models, seed_list=seed_list, input_dim=10, hidden_dim=64, output_dim=1, dropout_rate=0.1)
+#     criterion = nn.MSELoss()
+#     optimizer = torch.optim.Adam(ensemble.parameters(), lr=lr)
+#     for epoch in range(num_epochs):
+#         ensemble.train()
+#         pred, _ = ensemble(x_train, mc_samples=mc_samples)
+#         loss = criterion(pred, y_train)
+#         optimizer.zero_grad()
+#         loss.backward()
+#         optimizer.step()
+
+#     # MC Dropout enabled during eval
+#     ensemble.eval()
+#     with torch.no_grad():
+#         mean, std = ensemble(x_train, mc_samples=mc_samples)
