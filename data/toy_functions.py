@@ -1,3 +1,4 @@
+import random
 import numpy as np
 import torch
 
@@ -5,6 +6,7 @@ def sample_function(seed=None):
     if seed:
         torch.manual_seed(seed)
         np.random.seed(seed)
+        random.seed(seed)
     fn_type = np.random.choice(["sine", "quadratic", "step"])
     
     if fn_type == "sine":
@@ -47,7 +49,8 @@ def generate_meta_task(n_context=10, n_target=10,
         x_target = torch.tensor(x_target, dtype=torch.float32)
         y_target = torch.tensor(y_target, dtype=torch.float32)
 
-    return x_context.squeeze(), y_context.squeeze(), x_target.squeeze(), y_target.squeeze(), desc
+    # return x_context.squeeze(), y_context.squeeze(), x_target.squeeze(), y_target.squeeze(), desc
+    return x_context, y_context, x_target, y_target, desc
 
 
 if __name__ == "__main__":

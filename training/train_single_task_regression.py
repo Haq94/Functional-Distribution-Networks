@@ -71,7 +71,7 @@ def train_single_task_regression(
 
             y_predn, kln = outputs if isinstance(outputs, tuple) else (outputs, 0.0)
             msen = F.mse_loss(y_predn.squeeze(), y_cn.squeeze())
-
+            
             beta = min(beta_max, epoch / warmup_epochs)
             term = msen + beta * kln
             loss = term if loss is None else loss + term
@@ -125,7 +125,7 @@ def train_single_task_regression(
 if __name__ == "__main__":
     input_dim = 1               # <-- Use 1D input for clean visualizations
     hidden_dim = 32
-    epochs = 500
+    epochs = 1000
     print_every = 20
     sample = True
     seed = 10

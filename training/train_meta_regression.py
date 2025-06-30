@@ -104,7 +104,7 @@ if __name__ == "__main__":
     epochs = 4000
     print_every = 100
     sample = True
-    seed=None
+    seed=1
     model_type = 'LP_FDNet'
 
     # One task: context + target
