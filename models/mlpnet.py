@@ -14,7 +14,7 @@ class DeterministicMLPNetwork(nn.Module):
         x = F.relu(x)
         if self.use_dropout:
             x = self.dropout(x)
-        return self.fc2(x).squeeze(-1)
+        return self.fc2(x)
 
 
 # class DeepEnsembleNetwork(nn.Module):

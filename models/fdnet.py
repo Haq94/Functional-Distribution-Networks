@@ -80,16 +80,16 @@ class LP_FDNetwork(nn.Module):
         device = next(self.fdn1.hypernet.parameters()).device  # Or fdn2
         x = x.to(device)
 
-        # If x is not 3D, try to reshape it appropriately
-        if x.dim() == 2:
-            x = x.unsqueeze(-1)
-        elif x.dim() == 1:
-            x = x.unsqueeze(0).unsqueeze(-1)
-        elif x.dim() != 3:
-            raise ValueError(f"Unexpected shape for x: {x.shape}")
+        # # If x is not 3D, try to reshape it appropriately
+        # if x.dim() == 2:
+        #     x = x.unsqueeze(-1)
+        # elif x.dim() == 1:
+        #     x = x.unsqueeze(0).unsqueeze(-1)
+        # elif x.dim() != 3:
+        #     raise ValueError(f"Unexpected shape for x: {x.shape}")
 
         W1, b1, kl1 = self.fdn1(x, return_kl=return_kl, sample=sample) if return_kl else (*self.fdn1(x, sample=sample), 0.0)
-        x = torch.bmm(W1, x) + b1
+        x = torch.bmm(W1, x.unsqueeze(-1)) + b1
 
         x = torch.relu(x)
 
@@ -120,7 +120,7 @@ class IC_FDNetwork(nn.Module):
 
         # Generate weights and biases
         W1, b1, kl1 = self.fdn1(x, return_kl=return_kl, sample=sample) if return_kl else (*self.fdn1(x, sample=sample), 0.0)
-        W2, b2, kl2 = self.fdn2(x, return_kl=return_kl, sample=sample) if return_kl else (*self.fdn2(x.squeeze(-1), sample=sample), 0.0)
+        W2, b2, kl2 = self.fdn2(x, return_kl=return_kl, sample=sample) if return_kl else (*self.fdn2(x, sample=sample), 0.0)
 
         # If x is not 3D, try to reshape it appropriately
         if x.dim() == 2:

@@ -10,7 +10,7 @@ from models.gausshypernet import GaussianHyperNetwork
 from models.mlpnet import DeterministicMLPNetwork
 from models.deepensemblenet import DeepEnsembleNetwork
 from training.train_single_task_regression import train_single_task_regression
-from utils.results_saver import save_results
+from results_saver import save_results
 from utils.metrics import compute_nll, compute_rmse
 
 

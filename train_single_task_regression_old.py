@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import numpy as np
 import random
 
-from data.toy_functions import generate_meta_task
+from data.toy_functions import generate_meta_task, sample_function
 from models.fdnet import LP_FDNetwork, IC_FDNetwork
 from models.hypernet import HyperNetwork
 from models.bayesnet import BayesNetwork
@@ -37,10 +37,10 @@ def train_single_task_regression(
 
     # Context and target points for task
     x_c, y_c, x_t, y_t = (
-        x_c.unsqueeze(0).to(device),
-        y_c.unsqueeze(0).to(device),
-        x_t.unsqueeze(0).to(device),
-        y_t.unsqueeze(0).to(device)
+        torch.from_numpy(x_c).float().to(device),
+        torch.from_numpy(y_c).float().to(device),
+        torch.from_numpy(x_t).float().to(device),
+        torch.from_numpy(y_t).float().to(device)
     )
     # Losses, mse, and kl
     losses_list = []
@@ -105,16 +105,32 @@ def train_single_task_regression(
 
 
 if __name__ == "__main__":
+    x_min = -5
+    x_max = 5
+    batches = 4
     input_dim = 10
     hidden_dim = 32
-    epochs = 4000
+    epochs = 5000
     print_every = 100
     sample = True
     seed=None
-    model_type = 'IC_FDNet'
+    model_type = 'DeepEnsembleNet'
 
     # One task: context + target
-    x_c, y_c, x_t, y_t, desc = generate_meta_task(n_context=input_dim, n_target=input_dim, seed=seed)
+    f, desc = sample_function(seed=seed)
+    x_c = np.empty((0, input_dim))
+    y_c = np.empty((0, input_dim))
+
+    for n in range(batches):
+        x_cn = np.random.uniform(low=x_min, high=x_max, size=input_dim)
+        y_cn = f(x_cn)
+        x_c = np.vstack((x_c, x_cn))
+        y_c = np.vstack((y_c, y_cn))
+
+    x_t = np.random.uniform(low=x_min, high=x_max, size=(1, input_dim))
+    y_t = f(x_t)
+
+    # x_c, y_c, x_t, y_t, desc = generate_meta_task(n_context=input_dim, n_target=input_dim, seed=seed)
     if model_type == 'LP_FDNet':
         hyper_hidden_dim = 64
         model = LP_FDNetwork(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=input_dim, hyper_hidden_dim=hyper_hidden_dim)

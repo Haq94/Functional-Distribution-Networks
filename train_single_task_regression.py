@@ -125,11 +125,11 @@ def train_single_task_regression(
 if __name__ == "__main__":
     input_dim = 1               # <-- Use 1D input for clean visualizations
     hidden_dim = 32
-    epochs = 1000
+    epochs = 5000
     print_every = 20
     sample = True
     seed = 10
-    model_type = 'IC_FDNet'
+    model_type = 'BayesNet'
 
     # One task: context + target
     x_c, y_c, x_t, y_t, desc = generate_meta_task(n_context=10, n_target=100, seed=seed)

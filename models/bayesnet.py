@@ -47,8 +47,8 @@ class BayesLayer(nn.Module):
         x = F.linear(x, weight, bias)
 
         if return_kl:
-            kl_w = compute_kl_divergence(self.weight_mu, self.weight_log_sigma)
-            kl_b = compute_kl_divergence(self.bias_mu, self.bias_log_sigma)
+            kl_w = compute_kl_divergence(self.weight_mu, self.weight_log_sigma, reduction='sum')
+            kl_b = compute_kl_divergence(self.bias_mu, self.bias_log_sigma, reduction='sum')
             return x, kl_w + kl_b
         else:
             return x

@@ -54,6 +54,15 @@ class HyperNetwork(nn.Module):
         Returns:
             y: (B, output_dim)
         """
+
+        # # If x is not 3D, try to reshape it appropriately
+        # if x.dim() == 2:
+        #     x = x.unsqueeze(-1)
+        # elif x.dim() == 1:
+        #     x = x.unsqueeze(0).unsqueeze(-1)
+        # elif x.dim() != 3:
+        #     raise ValueError(f"Unexpected shape for x: {x.shape}")
+
         W1, b1 = self.hyper1(x)
         x = torch.bmm(W1, x.unsqueeze(-1)) + b1  # (B, H, 1)
         x = torch.relu(x)
