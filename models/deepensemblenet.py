@@ -14,11 +14,6 @@ class DeepEnsembleNetwork(nn.Module):
         super().__init__()
 
         if seed_list is not None and len(seed_list) != num_models:
-            print('seed_list is no the same length as num_models. Appending seed_list')
-            
-
-
-        if seed_list is not None and len(seed_list) != num_models:
             raise ValueError("seed_list must be the same length as num_models")
 
         self.models = nn.ModuleList()

@@ -1,9 +1,9 @@
 import os
-import json
 import torch
 import numpy as np
 import random
 from datetime import datetime
+import time
 
 from data.toy_functions import sample_function
 from models.fdnet import IC_FDNetwork, LP_FDNetwork
@@ -13,9 +13,9 @@ from models.gausshypernet import GaussianHyperNetwork
 from models.mlpnet import DeterministicMLPNetwork
 from models.deepensemblenet import DeepEnsembleNetwork
 from training.SingleTaskTrainer import SingleTaskTrainer
-from utils.saver import save_analysis_arrays
-from utils.metrics import metrics
-from utils.plots import plot_regression_diagnostics, plot_loss_curve
+from utils.saver import save_experiment_outputs
+from utils.metrics import metrics, get_summary
+from utils.plots import single_task_regression_plots
 
 class Experiments:
     def __init__(self, model_type=None, seeds=None, hidden_dim=32, hyper_hidden_dim=64):
@@ -24,24 +24,39 @@ class Experiments:
         self.hidden_dim = hidden_dim
         self.hyper_hidden_dim = hyper_hidden_dim
 
+        self.kl_models = {'IC_FDNet', 'LP_FDNet', 'BayesNet', 'GaussHyperNet'}
+        self.non_kl_models = {'MLPNet', 'DeepEnsembleNet', 'HyperNet'}
+        self.no_variance_models = {'MLPNet', 'HyperNet'}
+
     def run_experiments(self, x=np.linspace(start=-10,stop=10,num=500),
                             region_c=(-1,1),
-                            frac_c=0.5, epochs=1000, warmup_epochs=500, beta_max=1.0, num_samples=100, analysis=True):
+                            frac_c=0.5, epochs=1000, warmup_epochs=500, beta_max=1.0, num_samples=100, analysis=True, save_switch=False):
         # Parameters
         model_types = self.model_types
         seeds = self.seeds
+
         # Make dir
         results_dir = "results"
         os.makedirs(results_dir, exist_ok=True)
+
         # Define interpolation and extrapolation region
         ind_interp = np.where((x >= region_c[0]) & (x <= region_c[1]))[0]
         x_t = torch.tensor(x, dtype=torch.float64).unsqueeze(-1)
+        
+        # Date and time stamp for run name
+        date_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 
         for model_type in model_types:
             for seed in seeds:
                 # Set seed
                 torch.manual_seed(seed)
                 np.random.seed(seed)
+
+                # Run name
+                run_name = f"{model_type}_seed{seed}_{date_time}"
+
+                # Pre-allocate save dir
+                save_dir = None
 
                 # Context data
                 ind_c = np.random.choice(ind_interp, size=round(len(ind_interp)*frac_c), replace=False)
@@ -54,67 +69,47 @@ class Experiments:
                 y_t = torch.tensor(f(x_t), dtype=torch.float64)
                 y_c = torch.tensor(f(x_c), dtype=torch.float64)
 
-                # Init model
+                # Initiate model
                 model = self.build_model(model_type, input_dim=1)
 
                 # Create training class instance
-                trainer = SingleTaskTrainer(model)
+                trainer = SingleTaskTrainer(model) 
 
                 # Train
+                start_time = time.time()
                 trainer.train(x=x_c, y=y_c, epochs=epochs, warmup_epochs=warmup_epochs, beta_max=beta_max)
+                training_time = time.time() - start_time
 
-                # Eval
+                # Evaluate
                 preds = trainer.evaluate(x=x_t, num_samples=num_samples)
 
+                # Metrics
+                metric_outputs = metrics(preds, y_t, eps=1e-6)
+
                 if analysis:
-                    # Create save dir
-                    run_name = f"{model_type}_seed{seed}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-                    save_dir = os.path.join("results", model_type, run_name)
-                    os.makedirs(os.path.join(save_dir, "plots"), exist_ok=True)
-                    os.makedirs(os.path.join(save_dir, "analysis"), exist_ok=True)
+                    if save_switch:
+                        # Create save dir
+                        save_dir = os.path.join("results", model_type, run_name)
+                        
+                        # Generate summary
+                        summary = get_summary(metric_outputs, y_t, model, desc, seed, training_time)
 
-                    # Metrics
-                    metric_outputs = metrics(preds, y_t, eps=1e-6)
-
-                    # Save metrics
-                    save_analysis_arrays(metric_outputs, os.path.join(save_dir, "analysis"))
-                    np.savez(os.path.join(save_dir, "analysis", "loss_curve_data.npz"),
-                                        losses=trainer.losses,
-                                        mses=trainer.mses,
-                                        kls=trainer.kls,
-                                        betas=trainer.betas)
-
+                        # Save experiment output
+                        save_experiment_outputs(metric_outputs, model, trainer, summary, save_dir)
 
                     # Plot and save visuals
                     name = desc + ', Model: ' + model.__class__.__name__
-                    plot_regression_diagnostics(preds, x_c, y_c, x_t, y_t, desc, ind_c, 
-                                                metric_outputs=metric_outputs, block=False, 
-                                                save_dir=os.path.join(save_dir, "plots"))
+                    plot_save_dir = None if save_dir is None else os.path.join(save_dir, "plots")
+                    capabilities = self.get_capabilities(model_type)
+                    single_task_regression_plots(trainer, preds, x_c, y_c, x_t, y_t, name, ind_c, metric_outputs=metric_outputs, block=False, save_dir=plot_save_dir, capabilities=capabilities)
                     
-                    plot_loss_curve(trainer.losses, trainer.mses, trainer.kls, trainer.betas, desc=name, 
-                                    save_path=os.path.join(save_dir, "plots", "loss_curve.png"), block=False)
-                    
-                    # Save model
-                    torch.save(model.state_dict(), os.path.join(save_dir, "model.pt"))
+            print(f"Completed: {model_type} | seed: {seed} | training time: {training_time}s")
 
-                    # Compute and save summary stats
-                    mean_pred = metric_outputs[0]      # from metrics: mean
-                    nll_per_sample = metric_outputs[-1]  # from metrics: per-sample NLL
-                    rmse = float(np.sqrt(np.mean((mean_pred - y_t.cpu().numpy().squeeze())**2)))
-                    mean_nll = float(np.mean(nll_per_sample))
-
-                    summary = {
-                        "desc": desc,
-                        "model": model.__class__.__name__,
-                        "seed": seed,
-                        "rmse": rmse,
-                        "mean_nll": mean_nll,
-                        "timestamp": datetime.now().isoformat()
-                    }
-
-                    with open(os.path.join(save_dir, "metrics.json"), "w") as f:
-                        json.dump(summary, f, indent=4)
-
+    def get_capabilities(self, model_type):
+        capabilities = {"mean", "bias"}  # always
+        if model_type not in self.no_variance_models:
+            capabilities |= {"residuals", "variance", "nll"}
+        return capabilities
 
     def build_model(self, model_type, input_dim=1):
         hidden_dim = self.hidden_dim
@@ -132,10 +127,12 @@ class Experiments:
         elif model_type == 'MLPNet':
             return DeterministicMLPNetwork(input_dim, hidden_dim, input_dim, dropout_rate=0.1)
         elif model_type == 'DeepEnsembleNet':
+            num_models = 100
+            seed_list = [random.randint(0, 10*num_models) for _ in range(num_models)]
             return DeepEnsembleNetwork(
                 network_class=DeterministicMLPNetwork,
-                num_models=100,
-                seed_list=[0, 1, 2, 3, 4],
+                num_models=num_models,
+                seed_list=seed_list,
                 input_dim=input_dim,
                 hidden_dim=hidden_dim,
                 output_dim=input_dim,
@@ -146,8 +143,21 @@ class Experiments:
 
 
 if __name__ == "__main__":
-    exp_class = Experiments(seeds=[764])
-    exp_class.run_experiments(epochs=10, analysis=True)
+    # Model type
+    model_type = ['IC_FDNet', 'LP_FDNet', 'HyperNet', 'BayesNet', 'GaussHyperNet', 'MLPNet', 'DeepEnsembleNet'] 
+    # Seeds
+    seeds = [random.randint(0, 1000) for _ in range(1)]
+    seeds = [0]
+
+    # Number of epochs
+    epochs = 10
+    # Perform analysis 
+    analysis = True
+    # Save switch
+    save_switch = True
+
+    exp_class = Experiments(model_type=model_type, seeds=seeds)
+    exp_class.run_experiments(epochs=epochs, analysis=analysis, save_switch=save_switch)
     print('END')
 
 

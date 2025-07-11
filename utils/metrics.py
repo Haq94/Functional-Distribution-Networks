@@ -1,4 +1,5 @@
 import numpy as np
+from datetime import datetime
 
 def metrics(preds, y, eps=1e-6):
     """
@@ -55,6 +56,38 @@ def metrics(preds, y, eps=1e-6):
         bias_var_diff.squeeze(),
         nll.squeeze()
     )
+
+
+def get_summary(metric_outputs, y_t, model, desc, seed, training_time):
+    """
+    Generate summary statistics from model predictions and ground truth.
+
+    Args:
+        metric_outputs (tuple): Output from the `metrics` function (mean, std, nll, etc.)
+        y_t (torch.Tensor): Ground truth target values
+        model (torch.nn.Module): Model instance
+        desc (str): Task/function description
+        seed (int): Random seed used in experiment
+
+    Returns:
+        dict: Summary containing RMSE, NLL, and metadata
+    """
+    mean_pred = metric_outputs[0]         # Predicted mean
+    nll_per_sample = metric_outputs[-1]   # Per-sample NLL
+
+    y_t_np = y_t.detach().cpu().numpy().squeeze()
+    rmse = float(np.sqrt(np.mean((mean_pred - y_t_np) ** 2)))
+    mean_nll = float(np.mean(nll_per_sample))
+
+    return {
+        "desc": desc,
+        "model": model.__class__.__name__,
+        "seed": seed,
+        "rmse": rmse,
+        "mean_nll": mean_nll,
+        "training_time": training_time,
+        "timestamp": datetime.now().isoformat()
+    }
 
 # OLD CODE =======================================================================================================
 

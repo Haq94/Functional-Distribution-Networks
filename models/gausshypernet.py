@@ -62,5 +62,5 @@ class GaussianHyperNetwork(nn.Module):
         x, kl2 = self.layer2(x, return_kl=return_kl, sample=sample) if return_kl else (self.layer2(x, sample=sample), 0.0)
 
         if return_kl:
-            return x.squeeze(-1), kl1 + kl2
-        return x.squeeze(-1)
+            return x, kl1 + kl2
+        return x

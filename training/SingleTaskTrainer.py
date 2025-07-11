@@ -5,8 +5,8 @@ from torch.nn.utils import clip_grad_norm_
 from tqdm.auto import tqdm
 import numpy as np
 import random
-from utils.plots import plot_meta_task, plot_loss_curve
-from utils.debug_tools import debug_requires_grad, get_param_and_grad_dict
+# from utils.plots import plot_meta_task, plot_loss_curve
+# from utils.debug_tools import debug_requires_grad, get_param_and_grad_dict
 
 class SingleTaskTrainer:
     def __init__(self, model, optimizer=None, lr=1e-3, device=None):
@@ -83,13 +83,15 @@ class SingleTaskTrainer:
         N = x.shape[0]
         preds = []
 
+
         with torch.no_grad():
             if hasattr(self.model, 'forward') and ('return_kl' and 'sample' in self.model.forward.__code__.co_varnames):
                 y_pred = [self._model_forward(x=x, return_kl=False, sample=sample).squeeze(0).detach().cpu().numpy() for _ in range(num_samples)]
             elif self.model.__class__.__name__ == 'DeepEnsembleNetwork':
                 y_pred = self._model_forward(x=x)[0].squeeze(0).detach().cpu().numpy()
             else:
-                y_pred = [self._model_forward(x=x)[0].squeeze(0).detach().cpu().numpy() for _ in range(num_samples)]
+                y_pred = self._model_forward(x=x)[0].squeeze(0).detach().cpu().numpy()
+                y_pred = [y_pred for _ in range(num_samples)]
 
         preds = np.stack(y_pred)  # shape: (num_samples, batch_size, output_dim)
 
@@ -98,9 +100,9 @@ class SingleTaskTrainer:
     def _compute_beta(self, epoch, warmup_epochs, beta_max):
         return min(beta_max, epoch / warmup_epochs)
 
-    def plot_results(self, x_c, y_c, x_t, y_t, mean, std, desc=""):
-        plot_loss_curve(self.losses, self.mses, self.kls, self.betas, desc=desc)
-        plot_meta_task(x_c.cpu(), y_c.cpu(), x_t.cpu(), y_t.cpu(), mean, std, desc=desc)
+    # def plot_results(self, x_c, y_c, x_t, y_t, mean, std, desc=""):
+    #     plot_loss_curve(self.losses, self.mses, self.kls, self.betas, desc=desc)
+    #     plot_meta_task(x_c.cpu(), y_c.cpu(), x_t.cpu(), y_t.cpu(), mean, std, desc=desc)
 
 if __name__=='__main__':
 
