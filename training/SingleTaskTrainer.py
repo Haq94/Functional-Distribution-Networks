@@ -84,13 +84,12 @@ class SingleTaskTrainer:
         preds = []
 
         with torch.no_grad():
-            # for n in range(N):    
-            #     x_n = x[n:n+1]
             if hasattr(self.model, 'forward') and ('return_kl' and 'sample' in self.model.forward.__code__.co_varnames):
-                y_pred = [self._model_forward(x=x, return_kl=False, sample=sample).squeeze(0).cpu().numpy() for _ in range(num_samples)]
+                y_pred = [self._model_forward(x=x, return_kl=False, sample=sample).squeeze(0).detach().cpu().numpy() for _ in range(num_samples)]
+            elif self.model.__class__.__name__ == 'DeepEnsembleNetwork':
+                y_pred = self._model_forward(x=x)[0].squeeze(0).detach().cpu().numpy()
             else:
-                y_pred = [self._model_forward(x=x)[0].squeeze(0).cpu().numpy() for _ in range(num_samples)]
-            # preds.append(np.stack(y_pred))
+                y_pred = [self._model_forward(x=x)[0].squeeze(0).detach().cpu().numpy() for _ in range(num_samples)]
 
         preds = np.stack(y_pred)  # shape: (num_samples, batch_size, output_dim)
 

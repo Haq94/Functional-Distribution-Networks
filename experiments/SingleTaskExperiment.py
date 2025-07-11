@@ -43,13 +43,6 @@ class Experiments:
                 torch.manual_seed(seed)
                 np.random.seed(seed)
 
-                # Create save dir
-                if analysis:
-                    run_name = f"{model_type}_seed{seed}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-                    save_dir = os.path.join("results", model_type, run_name)
-                    os.makedirs(os.path.join(save_dir, "plots"), exist_ok=True)
-                    os.makedirs(os.path.join(save_dir, "analysis"), exist_ok=True)
-
                 # Context data
                 ind_c = np.random.choice(ind_interp, size=round(len(ind_interp)*frac_c), replace=False)
                 x_c = torch.tensor(x[ind_c], dtype=torch.float64).unsqueeze(-1)
@@ -74,6 +67,11 @@ class Experiments:
                 preds = trainer.evaluate(x=x_t, num_samples=num_samples)
 
                 if analysis:
+                    # Create save dir
+                    run_name = f"{model_type}_seed{seed}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+                    save_dir = os.path.join("results", model_type, run_name)
+                    os.makedirs(os.path.join(save_dir, "plots"), exist_ok=True)
+                    os.makedirs(os.path.join(save_dir, "analysis"), exist_ok=True)
 
                     # Metrics
                     metric_outputs = metrics(preds, y_t, eps=1e-6)
@@ -136,7 +134,7 @@ class Experiments:
         elif model_type == 'DeepEnsembleNet':
             return DeepEnsembleNetwork(
                 network_class=DeterministicMLPNetwork,
-                num_models=5,
+                num_models=100,
                 seed_list=[0, 1, 2, 3, 4],
                 input_dim=input_dim,
                 hidden_dim=hidden_dim,
@@ -148,8 +146,8 @@ class Experiments:
 
 
 if __name__ == "__main__":
-    exp_class = Experiments(model_type=['DeepEnsembleNet'], seeds=[764])
-    exp_class.run_experiments(epochs=10, analysis=False)
+    exp_class = Experiments(seeds=[764])
+    exp_class.run_experiments(epochs=10, analysis=True)
     print('END')
 
 
