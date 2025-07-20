@@ -1,0 +1,9 @@
+{
+    "desc": "quad (a=0.99, b=0.87)",
+    "model": "DeterministicMLPNetwork",
+    "seed": 1,
+    "rmse": 37.60416534877515,
+    "mean_nll": 707036619.8001941,
+    "training_time": 5.9547178745269775,
+    "timestamp": "2025-07-11T10:26:19.929666"
+}

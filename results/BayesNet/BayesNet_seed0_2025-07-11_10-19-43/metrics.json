@@ -1,0 +1,9 @@
+{
+    "desc": "sine (a=0.53, b=2.24)",
+    "model": "BayesNetwork",
+    "seed": 0,
+    "rmse": 1.3555902889464226,
+    "mean_nll": 3.19426065200169,
+    "training_time": 8.54661774635315,
+    "timestamp": "2025-07-11T10:23:06.946579"
+}

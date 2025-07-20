@@ -1,0 +1,9 @@
+{
+    "desc": "sine (a=0.78, b=2.86)",
+    "model": "DeterministicMLPNetwork",
+    "seed": 2,
+    "rmse": 2.4254943886773837,
+    "mean_nll": 2941505.5259359917,
+    "training_time": 7.402034759521484,
+    "timestamp": "2025-07-11T10:26:36.871084"
+}

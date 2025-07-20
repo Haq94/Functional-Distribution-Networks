@@ -1,0 +1,9 @@
+{
+    "desc": "quad (a=0.99, b=0.87)",
+    "model": "BayesNetwork",
+    "seed": 1,
+    "rmse": 40.03749821126346,
+    "mean_nll": 5.006136790703942,
+    "training_time": 8.769355058670044,
+    "timestamp": "2025-07-11T10:23:31.124430"
+}

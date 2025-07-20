@@ -1,0 +1,9 @@
+{
+    "desc": "quad (a=0.99, b=0.87)",
+    "model": "DeepEnsembleNetwork",
+    "seed": 1,
+    "rmse": 36.59987378945331,
+    "mean_nll": 26.869017658021438,
+    "training_time": 89.25293684005737,
+    "timestamp": "2025-07-11T10:30:06.489850"
+}

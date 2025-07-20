@@ -44,8 +44,8 @@ def save_plot(save_dir, plot_name, dpi=300, formats=("pkl", "png", "pdf"), fig=N
         else:
             fig.savefig(full_path, dpi=dpi, format=fmt, bbox_inches="tight")
 
-def save_experiment_outputs(metric_outputs, model, trainer, summary, save_dir):
-    # Create dir
+def save_experiment_outputs(metric_outputs, model, trainer, summary, x_train, y_train, x_test, y_test, save_dir):
+    # Create directory
     os.makedirs(os.path.join(save_dir, "analysis"), exist_ok=True)
 
     # Save metrics
@@ -59,6 +59,14 @@ def save_experiment_outputs(metric_outputs, model, trainer, summary, save_dir):
     # Save model
     torch.save(model.state_dict(), os.path.join(save_dir, "model.pt"))
 
+    # Save test and training data
+    np.savez(os.path.join(save_dir, "analysis", "data.npz"),
+             x_train=x_train.cpu().numpy(),
+             y_train=y_train.cpu().numpy(),
+             x_test=x_test.cpu().numpy(),
+             y_test=y_test.cpu().numpy())
+
+    # Save summary
     with open(os.path.join(save_dir, "metrics.json"), "w") as f:
         json.dump(summary, f, indent=4)
 

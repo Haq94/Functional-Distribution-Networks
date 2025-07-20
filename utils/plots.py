@@ -220,6 +220,40 @@ def single_task_regression_plots(trainer, preds, x_c, y_c, x_t, y_t, desc, ind_c
     if "nll" in capabilities:
         plot_nll(x_t_np, nll, ind_c, x_c_min, x_c_max, desc, save_dir=save_dir, block=block)
 
+def overlay_plot_metrics(metric_dicts, x, metric_name="mse", title=None, save_path=None, log_scale=False, block=False):
+    """
+    Overlay a metric (e.g., MSE, bias) from multiple models on the same plot.
+
+    Args:
+        metric_dicts (list of tuples): List of (label, metric_array) tuples.
+        x (np.ndarray): 1D array for x-axis (e.g., test inputs).
+        metric_name (str): Metric being plotted ("mse", "bias", "mean", etc.).
+        title (str or None): Title of the plot.
+        save_path (str or None): If provided, saves the plot to this path.
+        log_scale (bool): Whether to use dB scale (10 * log10).
+        block (bool): Whether to block on plt.show().
+    """
+    plt.figure(figsize=(10, 6))
+
+    for label, values in metric_dicts:
+        if log_scale:
+            values = 10 * np.log10(values)
+        plt.plot(x, values, label=label)
+
+    plt.title(title or f"{metric_name.upper()} Comparison")
+    plt.xlabel("x")
+    plt.ylabel(f"{metric_name} (dB)" if log_scale else metric_name)
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300)
+    if block:
+        plt.show()
+
+    plt.close()
+
 
 # OLD CODE =======================================================================================================
 

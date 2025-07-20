@@ -1,0 +1,9 @@
+{
+    "desc": "sine (a=0.53, b=2.24)",
+    "model": "DeepEnsembleNetwork",
+    "seed": 0,
+    "rmse": 0.7447067272013638,
+    "mean_nll": 1.8326903139135533,
+    "training_time": 92.1858298778534,
+    "timestamp": "2025-07-11T10:28:18.953230"
+}

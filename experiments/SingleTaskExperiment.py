@@ -41,7 +41,7 @@ class Experiments:
 
         # Define interpolation and extrapolation region
         ind_interp = np.where((x >= region_c[0]) & (x <= region_c[1]))[0]
-        x_t = torch.tensor(x, dtype=torch.float64).unsqueeze(-1)
+        x_test = torch.tensor(x, dtype=torch.float64).unsqueeze(-1)
         
         # Date and time stamp for run name
         date_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
@@ -59,15 +59,15 @@ class Experiments:
                 save_dir = None
 
                 # Context data
-                ind_c = np.random.choice(ind_interp, size=round(len(ind_interp)*frac_c), replace=False)
-                x_c = torch.tensor(x[ind_c], dtype=torch.float64).unsqueeze(-1)
+                ind_train = np.random.choice(ind_interp, size=round(len(ind_interp)*frac_c), replace=False)
+                x_train = torch.tensor(x[ind_train], dtype=torch.float64).unsqueeze(-1)
 
                 # Generate function
                 f, desc = sample_function(seed=seed)
 
                 # Generate outputs
-                y_t = torch.tensor(f(x_t), dtype=torch.float64)
-                y_c = torch.tensor(f(x_c), dtype=torch.float64)
+                y_test = torch.tensor(f(x_test), dtype=torch.float64)
+                y_train = torch.tensor(f(x_train), dtype=torch.float64)
 
                 # Initiate model
                 model = self.build_model(model_type, input_dim=1)
@@ -77,14 +77,14 @@ class Experiments:
 
                 # Train
                 start_time = time.time()
-                trainer.train(x=x_c, y=y_c, epochs=epochs, warmup_epochs=warmup_epochs, beta_max=beta_max)
+                trainer.train(x=x_train, y=y_train, epochs=epochs, warmup_epochs=warmup_epochs, beta_max=beta_max)
                 training_time = time.time() - start_time
 
                 # Evaluate
-                preds = trainer.evaluate(x=x_t, num_samples=num_samples)
+                preds = trainer.evaluate(x=x_test, num_samples=num_samples)
 
                 # Metrics
-                metric_outputs = metrics(preds, y_t, eps=1e-6)
+                metric_outputs = metrics(preds, y_test, eps=1e-6)
 
                 if analysis:
                     if save_switch:
@@ -92,16 +92,16 @@ class Experiments:
                         save_dir = os.path.join("results", model_type, run_name)
                         
                         # Generate summary
-                        summary = get_summary(metric_outputs, y_t, model, desc, seed, training_time)
+                        summary = get_summary(metric_outputs, y_test, model, desc, seed, training_time)
 
                         # Save experiment output
-                        save_experiment_outputs(metric_outputs, model, trainer, summary, save_dir)
+                        save_experiment_outputs(metric_outputs, model, trainer, summary, x_train, y_train, x_test, y_test, save_dir)
 
                     # Plot and save visuals
                     name = desc + ', Model: ' + model.__class__.__name__
                     plot_save_dir = None if save_dir is None else os.path.join(save_dir, "plots")
                     capabilities = self.get_capabilities(model_type)
-                    single_task_regression_plots(trainer, preds, x_c, y_c, x_t, y_t, name, ind_c, metric_outputs=metric_outputs, block=False, save_dir=plot_save_dir, capabilities=capabilities)
+                    single_task_regression_plots(trainer, preds, x_train, y_train, x_test, y_test, name, ind_train, metric_outputs=metric_outputs, block=False, save_dir=plot_save_dir, capabilities=capabilities)
                     
             print(f"Completed: {model_type} | seed: {seed} | training time: {training_time}s")
 
@@ -146,17 +146,16 @@ if __name__ == "__main__":
     # Model type
     model_type = ['IC_FDNet', 'LP_FDNet', 'HyperNet', 'BayesNet', 'GaussHyperNet', 'MLPNet', 'DeepEnsembleNet'] 
     # Seeds
-    seeds = [random.randint(0, 1000) for _ in range(1)]
-    seeds = [0]
-
+    seeds = [0, 1, 2]
     # Number of epochs
-    epochs = 10
+    epochs = 1000
     # Perform analysis 
     analysis = True
     # Save switch
     save_switch = True
-
+    # Create experiment class instance
     exp_class = Experiments(model_type=model_type, seeds=seeds)
+    # Run experiment
     exp_class.run_experiments(epochs=epochs, analysis=analysis, save_switch=save_switch)
     print('END')
 

@@ -1,0 +1,9 @@
+{
+    "desc": "sine (a=0.78, b=2.86)",
+    "model": "GaussianHyperNetwork",
+    "seed": 2,
+    "rmse": 2.185029913822303,
+    "mean_nll": 2.8632293560201743,
+    "training_time": 13.023335218429565,
+    "timestamp": "2025-07-11T10:25:41.689719"
+}

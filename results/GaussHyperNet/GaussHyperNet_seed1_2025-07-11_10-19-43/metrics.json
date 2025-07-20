@@ -1,0 +1,9 @@
+{
+    "desc": "quad (a=0.99, b=0.87)",
+    "model": "GaussianHyperNetwork",
+    "seed": 1,
+    "rmse": 34.30540365094408,
+    "mean_nll": 5.427478597644063,
+    "training_time": 15.688200235366821,
+    "timestamp": "2025-07-11T10:25:09.717289"
+}
