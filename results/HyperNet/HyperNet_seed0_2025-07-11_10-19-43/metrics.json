@@ -1,9 +1,0 @@
-{
-    "desc": "sine (a=0.53, b=2.24)",
-    "model": "HyperNetwork",
-    "seed": 0,
-    "rmse": 32.63598971285711,
-    "mean_nll": 532553906.2800405,
-    "training_time": 6.893721342086792,
-    "timestamp": "2025-07-11T10:22:25.139968"
-}

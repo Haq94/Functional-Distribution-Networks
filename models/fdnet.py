@@ -1,5 +1,7 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
 from utils.kl_divergence import compute_kl_divergence
 
 class FDNLayer(nn.Module):
@@ -19,12 +21,13 @@ class FDNLayer(nn.Module):
             nn.Linear(hyper_hidden_dim, total_output_dim)
         )
 
-    def forward(self, x, return_kl=False, sample=True):
+    def forward(self, x, return_kl=False, sample=True, use_softplus=True):
         """
         Args:
             x: Input tensor of shape [B, input_dim]
             return_kl: Whether to return KL divergence term
             sample: Whether to sample weights and biases (True during training or uncertainty estimation)
+            use_softplus: Whether to use softplus
         Returns:
             Prediction tensor (and optionally, KL divergence)
         """
@@ -41,8 +44,12 @@ class FDNLayer(nn.Module):
             w_mu, w_log_sigma, b_mu, b_log_sigma = torch.split(h, split_sizes, dim=-1)
 
             # Reparameterization
-            w_sigma = torch.exp(w_log_sigma)
-            b_sigma = torch.exp(b_log_sigma)
+            if use_softplus:
+                w_sigma = 1e-3 + F.softplus(w_log_sigma)
+                b_sigma = 1e-3 + F.softplus(b_log_sigma)
+            else:
+                w_sigma = torch.exp(w_log_sigma)
+                b_sigma = torch.exp(b_log_sigma)
 
             W = w_mu + w_sigma * torch.randn_like(w_mu, device=w_mu.device)
             b = b_mu + b_sigma * torch.randn_like(b_mu, device=b_mu.device)
@@ -56,8 +63,8 @@ class FDNLayer(nn.Module):
         b = b.view(B, self.output_dim, 1)
 
         if return_kl:
-            kl_w = compute_kl_divergence(w_mu, w_log_sigma)
-            kl_b = compute_kl_divergence(b_mu, b_log_sigma)
+            kl_w = compute_kl_divergence(w_mu, w_log_sigma, use_softplus=use_softplus)
+            kl_b = compute_kl_divergence(b_mu, b_log_sigma, use_softplus=use_softplus)
             return W, b, kl_w + kl_b
         else:
             return W, b
@@ -68,12 +75,13 @@ class LP_FDNetwork(nn.Module):
         self.fdn1 = FDNLayer(input_dim, input_dim, hidden_dim, hyper_hidden_dim)
         self.fdn2 = FDNLayer(hidden_dim, hidden_dim, output_dim, hyper_hidden_dim)
 
-    def forward(self, x, return_kl=False, sample=True):
+    def forward(self, x, return_kl=False, sample=True, use_softplus=True):
         """
         Args:
             x: Input tensor of shape [B, input_dim]
             return_kl: Whether to return KL divergence term
             sample: Whether to sample weights and biases (True during training or uncertainty estimation)
+            use_softplus: Whether to use softplus
         Returns:
             Prediction tensor (and optionally, KL divergence)
         """
@@ -88,12 +96,12 @@ class LP_FDNetwork(nn.Module):
         # elif x.dim() != 3:
         #     raise ValueError(f"Unexpected shape for x: {x.shape}")
 
-        W1, b1, kl1 = self.fdn1(x, return_kl=return_kl, sample=sample) if return_kl else (*self.fdn1(x, sample=sample), 0.0)
+        W1, b1, kl1 = self.fdn1(x, return_kl=return_kl, sample=sample,use_softplus= use_softplus) if return_kl else (*self.fdn1(x, sample=sample, use_softplus=use_softplus), 0.0)
         x = torch.bmm(W1, x.unsqueeze(-1)) + b1
 
         x = torch.relu(x)
 
-        W2, b2, kl2 = self.fdn2(x.squeeze(-1), return_kl=return_kl, sample=sample) if return_kl else (*self.fdn2(x.squeeze(-1), sample=sample), 0.0)
+        W2, b2, kl2 = self.fdn2(x.squeeze(-1), return_kl=return_kl, sample=sample, use_softplus=use_softplus) if return_kl else (*self.fdn2(x.squeeze(-1), sample=sample, use_softplus=use_softplus), 0.0)
         x = torch.bmm(W2, x) + b2
 
         if return_kl:
@@ -106,12 +114,13 @@ class IC_FDNetwork(nn.Module):
         self.fdn1 = FDNLayer(input_dim, input_dim, hidden_dim, hyper_hidden_dim)
         self.fdn2 = FDNLayer(input_dim, hidden_dim, output_dim, hyper_hidden_dim)
 
-    def forward(self, x, return_kl=False, sample=True):
+    def forward(self, x, return_kl=False, sample=True, use_softplus=True):
         """
         Args:
             x: Input tensor of shape [B, input_dim]
             return_kl: Whether to return KL divergence term
             sample: Whether to sample weights and biases (True during training or uncertainty estimation)
+            use_softplus: Whether to use softplus
         Returns:
             Prediction tensor (and optionally, KL divergence)
         """
@@ -119,8 +128,8 @@ class IC_FDNetwork(nn.Module):
         x = x.to(device)
 
         # Generate weights and biases
-        W1, b1, kl1 = self.fdn1(x, return_kl=return_kl, sample=sample) if return_kl else (*self.fdn1(x, sample=sample), 0.0)
-        W2, b2, kl2 = self.fdn2(x, return_kl=return_kl, sample=sample) if return_kl else (*self.fdn2(x, sample=sample), 0.0)
+        W1, b1, kl1 = self.fdn1(x, return_kl=return_kl, sample=sample, use_softplus=use_softplus) if return_kl else (*self.fdn1(x, sample=sample, use_softplus=use_softplus), 0.0)
+        W2, b2, kl2 = self.fdn2(x, return_kl=return_kl, sample=sample, use_softplus=use_softplus) if return_kl else (*self.fdn2(x, sample=sample, use_softplus=use_softplus), 0.0)
 
         # If x is not 3D, try to reshape it appropriately
         if x.dim() == 2:

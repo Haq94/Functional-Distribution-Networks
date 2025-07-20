@@ -58,7 +58,7 @@ def metrics(preds, y, eps=1e-6):
     )
 
 
-def get_summary(metric_outputs, y_t, model, desc, seed, training_time):
+def get_summary(metric_outputs, y_t, model, desc, seed, training_time, epochs, warmup_epochs, x, region_interp, frac_train):
     """
     Generate summary statistics from model predictions and ground truth.
 
@@ -68,9 +68,15 @@ def get_summary(metric_outputs, y_t, model, desc, seed, training_time):
         model (torch.nn.Module): Model instance
         desc (str): Task/function description
         seed (int): Random seed used in experiment
+        training_time (float): Total training time in seconds
+        epochs (int): Total number of training epochs
+        warmup_epochs (int): Number of KL warmup epochs
+        x (np.ndarray): Full x domain used in evaluation
+        region_interp (tuple): Interpolation region bounds
+        frac_train (float): Fraction of interpolation region used for training
 
     Returns:
-        dict: Summary containing RMSE, NLL, and metadata
+        dict: Summary containing RMSE, NLL, and experiment metadata
     """
     mean_pred = metric_outputs[0]         # Predicted mean
     nll_per_sample = metric_outputs[-1]   # Per-sample NLL
@@ -86,8 +92,15 @@ def get_summary(metric_outputs, y_t, model, desc, seed, training_time):
         "rmse": rmse,
         "mean_nll": mean_nll,
         "training_time": training_time,
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
+        "epochs": epochs,
+        "warmup_epochs": warmup_epochs,
+        "x_min": float(np.min(x)),
+        "x_max": float(np.max(x)),
+        "region_interp": region_interp,
+        "frac_train": frac_train
     }
+
 
 # OLD CODE =======================================================================================================
 

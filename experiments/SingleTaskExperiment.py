@@ -4,6 +4,7 @@ import numpy as np
 import random
 from datetime import datetime
 import time
+from tqdm import tqdm
 
 from data.toy_functions import sample_function
 from models.fdnet import IC_FDNetwork, LP_FDNetwork
@@ -29,8 +30,8 @@ class Experiments:
         self.no_variance_models = {'MLPNet', 'HyperNet'}
 
     def run_experiments(self, x=np.linspace(start=-10,stop=10,num=500),
-                            region_c=(-1,1),
-                            frac_c=0.5, epochs=1000, warmup_epochs=500, beta_max=1.0, num_samples=100, analysis=True, save_switch=False):
+                            region_interp=(-1,1),
+                            frac_train=0.5, epochs=1000, warmup_epochs=500, beta_max=1.0, num_samples=100, analysis=True, save_switch=False):
         # Parameters
         model_types = self.model_types
         seeds = self.seeds
@@ -40,14 +41,15 @@ class Experiments:
         os.makedirs(results_dir, exist_ok=True)
 
         # Define interpolation and extrapolation region
-        ind_interp = np.where((x >= region_c[0]) & (x <= region_c[1]))[0]
+        ind_interp = np.where((x >= region_interp[0]) & (x <= region_interp[1]))[0]
+        ind_extrap = np.where((x < region_interp[0]) | (x > region_interp[1]))[0]
         x_test = torch.tensor(x, dtype=torch.float64).unsqueeze(-1)
         
         # Date and time stamp for run name
         date_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 
-        for model_type in model_types:
-            for seed in seeds:
+        for model_type in tqdm(model_types):
+            for seed in tqdm(seeds, leave=False):
                 # Set seed
                 torch.manual_seed(seed)
                 np.random.seed(seed)
@@ -58,8 +60,9 @@ class Experiments:
                 # Pre-allocate save dir
                 save_dir = None
 
-                # Context data
-                ind_train = np.random.choice(ind_interp, size=round(len(ind_interp)*frac_c), replace=False)
+                # Training data
+                ind_train = np.random.choice(ind_interp, size=round(len(ind_interp)*frac_train), replace=False)
+                ind_test = np.array([n for n in range(x.shape[0]) if n not in ind_train])
                 x_train = torch.tensor(x[ind_train], dtype=torch.float64).unsqueeze(-1)
 
                 # Generate function
@@ -86,13 +89,13 @@ class Experiments:
                 # Metrics
                 metric_outputs = metrics(preds, y_test, eps=1e-6)
 
-                if analysis:
+                if analysis:    
                     if save_switch:
                         # Create save dir
-                        save_dir = os.path.join("results", model_type, run_name)
+                        save_dir = os.path.join("results", 'single_task_experiment', model_type, run_name)
                         
                         # Generate summary
-                        summary = get_summary(metric_outputs, y_test, model, desc, seed, training_time)
+                        summary = get_summary(metric_outputs, y_test, model, desc, seed, training_time, epochs, warmup_epochs, x, region_interp, frac_train)
 
                         # Save experiment output
                         save_experiment_outputs(metric_outputs, model, trainer, summary, x_train, y_train, x_test, y_test, save_dir)
@@ -101,7 +104,7 @@ class Experiments:
                     name = desc + ', Model: ' + model.__class__.__name__
                     plot_save_dir = None if save_dir is None else os.path.join(save_dir, "plots")
                     capabilities = self.get_capabilities(model_type)
-                    single_task_regression_plots(trainer, preds, x_train, y_train, x_test, y_test, name, ind_train, metric_outputs=metric_outputs, block=False, save_dir=plot_save_dir, capabilities=capabilities)
+                    single_task_regression_plots(trainer, preds, x_train, y_train, x_test, y_test, name, ind_train, region_interp, metric_outputs=metric_outputs, block=False, save_dir=plot_save_dir, capabilities=capabilities)
                     
             print(f"Completed: {model_type} | seed: {seed} | training time: {training_time}s")
 
@@ -145,18 +148,40 @@ class Experiments:
 if __name__ == "__main__":
     # Model type
     model_type = ['IC_FDNet', 'LP_FDNet', 'HyperNet', 'BayesNet', 'GaussHyperNet', 'MLPNet', 'DeepEnsembleNet'] 
+    # model_type = ['LP_FDNet'] 
     # Seeds
-    seeds = [0, 1, 2]
+    seeds = [7, 8, 9]
     # Number of epochs
-    epochs = 1000
+    epochs = 10
     # Perform analysis 
     analysis = True
     # Save switch
     save_switch = True
+    # Training region
+    region_interp = (-1,1)
+    # Create data
+    input_type = "uniform_random"
+    input_seed = 1
+    x_min = -100
+    x_max = 100
+    n_interp = 100
+    n_extrap = 1000
+    if input_type == "uniform_random":
+        np.random.seed(input_seed)
+        x_l = np.random.uniform(low=x_min,high=region_interp[0],size=round(n_extrap/2)) 
+        x_c = np.random.uniform(low=region_interp[0],high=region_interp[1],size=n_interp)
+        x_r = np.random.uniform(low=region_interp[1],high=x_max,size=n_extrap-round(n_extrap/2))
+    else:
+        x_l = np.linspace(start=x_min,stop=region_interp[0],num=round(n_extrap/2))
+        x_c = np.linspace(start=region_interp[0],stop=region_interp[1],num=n_interp+2)
+        x_r = np.linspace(start=region_interp[1],stop=x_max,num=n_extrap-round(n_extrap/2))
+    x = np.sort(np.unique(np.concatenate([x_l, x_c, x_r])))
+    # Fraction of points of data points in region used for training
+    frac_train = 0.5
     # Create experiment class instance
     exp_class = Experiments(model_type=model_type, seeds=seeds)
     # Run experiment
-    exp_class.run_experiments(epochs=epochs, analysis=analysis, save_switch=save_switch)
+    exp_class.run_experiments(x=x, region_interp=region_interp, frac_train=frac_train, epochs=epochs, analysis=analysis, save_switch=save_switch)
     print('END')
 
 
