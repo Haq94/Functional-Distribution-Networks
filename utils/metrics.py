@@ -58,7 +58,7 @@ def metrics(preds, y, eps=1e-6):
     )
 
 
-def get_summary(metric_outputs, y_t, model, desc, seed, training_time, epochs, warmup_epochs, x, region_interp, frac_train):
+def get_summary(metric_outputs, y_t, model, desc, seed, training_time, epochs, beta_param_dict, x, region_interp, frac_train):
     """
     Generate summary statistics from model predictions and ground truth.
 
@@ -70,7 +70,7 @@ def get_summary(metric_outputs, y_t, model, desc, seed, training_time, epochs, w
         seed (int): Random seed used in experiment
         training_time (float): Total training time in seconds
         epochs (int): Total number of training epochs
-        warmup_epochs (int): Number of KL warmup epochs
+        beta_param_dict (dict): Dictionary with beta scheduler information
         x (np.ndarray): Full x domain used in evaluation
         region_interp (tuple): Interpolation region bounds
         frac_train (float): Fraction of interpolation region used for training
@@ -94,7 +94,7 @@ def get_summary(metric_outputs, y_t, model, desc, seed, training_time, epochs, w
         "training_time": training_time,
         "timestamp": datetime.now().isoformat(),
         "epochs": epochs,
-        "warmup_epochs": warmup_epochs,
+        "beta_param_dict": beta_param_dict,
         "x_min": float(np.min(x)),
         "x_max": float(np.max(x)),
         "region_interp": region_interp,

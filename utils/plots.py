@@ -51,10 +51,8 @@ def plot_loss_curve(losses, mses, kls, betas, title="Training Loss Curve", desc=
 
     if save_dir:
         save_plot(save_dir, "loss_curve")
-
     if block:
         plt.show()
-
     plt.close()
 
 def plot_residual_scatter(x_t_np, res_prec, res_acc, bias, x_c_min, x_c_max, desc, save_dir=None, block=False):
@@ -252,8 +250,6 @@ def plot_mse_var_2x2(var, mse, ind_test, ind_test_interp, ind_test_extrap, ind_t
         plt.show()
     plt.close()
 
-######################################
-
 def plot_bias_sq_var(var, bias, ind_test_interp, ind_test_extrap, ind_train, desc, save_dir=None, block=False):
     plt.figure(figsize=(10,8))
     plt.scatter(10*np.log10(var[ind_test_interp]**2), 10*np.log10(bias[ind_test_interp]**2), alpha=1.0, s=10, c="red", label="Test Interpolation Points")
@@ -296,7 +292,36 @@ def plot_bias_sq_var_2x2(var, bias, ind_test, ind_test_interp, ind_test_extrap, 
 
 ######################################
 
+def plot_prediction_histogram_waterfall(preds, x, y, bins=50, desc=None, save_dir=None, block=False):
+    """
+    Waterfall-style histogram of predictions over x.
+    """
+    n_x = preds.shape[1]
+    hist_matrix = []
 
+    for i in range(n_x):
+        hist, _ = np.histogram(preds[:, i], bins=bins, range=(preds.min(), preds.max()), density=True)
+        hist_matrix.append(hist)
+
+    hist_matrix = np.array(hist_matrix).T  # shape: [bins, n_x]
+    
+    plt.figure(figsize=(12, 6))
+    plt.imshow(hist_matrix, aspect='auto', origin='lower',
+               extent=[x.min(), x.max(), preds.min(), preds.max()],
+               cmap='viridis')
+    plt.colorbar(label='Density')
+    plt.plot(x,y)
+    plt.title(f"Prediction Histogram Waterfall: {desc}")
+    plt.xlabel("x")
+    plt.ylabel("y")
+    plt.tight_layout()
+    if save_dir:
+        save_plot(save_dir, "pred_waterfall_hist")
+    if block:
+        plt.show()
+    plt.close()
+
+######################################
 
 def single_task_regression_plots(trainer, preds, x_train, y_train, x_test, y_test, desc, ind_train, region_interp, metric_outputs=None, block=False, save_dir=None, capabilities=set()):
     """
@@ -350,6 +375,8 @@ def single_task_regression_plots(trainer, preds, x_train, y_train, x_test, y_tes
         plot_mean_prediction(x_test_np, y_test_np, mean, std, preds, x_train_np, y_train_np, x_c_min, x_c_max, desc, save_dir=save_dir, block=block, zoom=True)
     if "variance" in capabilities:
         plot_variance(x_test_np, var, mean, ind_train, x_c_min, x_c_max, desc, save_dir=save_dir, block=block)
+
+        plot_prediction_histogram_waterfall(preds, x_test_np, y_test_np, bins=50, desc=desc, save_dir=save_dir, block=block)
 
         plot_mse_bias_sq_scatter(bias, mse, ind_test_interp, ind_test_extrap, ind_train, desc, save_dir=save_dir, block=block)
         plot_mse_bias_sq_scatter_2x2(bias, mse, ind_test, ind_test_interp, ind_test_extrap, ind_train, desc, save_dir=save_dir, block=block)

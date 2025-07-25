@@ -6,6 +6,7 @@ from datetime import datetime
 import time
 from tqdm import tqdm
 
+from experiments.base_experiment import BaseExperiment
 from data.toy_functions import sample_function
 from models.fdnet import IC_FDNetwork, LP_FDNetwork
 from models.hypernet import HyperNetwork
@@ -13,12 +14,12 @@ from models.bayesnet import BayesNetwork
 from models.gausshypernet import GaussianHyperNetwork
 from models.mlpnet import DeterministicMLPNetwork
 from models.deepensemblenet import DeepEnsembleNetwork
-from training.SingleTaskTrainer import SingleTaskTrainer
+from training.single_task_trainer import SingleTaskTrainer
 from utils.saver import save_experiment_outputs
 from utils.metrics import metrics, get_summary
 from utils.plots import single_task_regression_plots
 
-class Experiments:
+class SingleTaskExperiment:
     def __init__(self, model_type=None, seeds=None, hidden_dim=32, hyper_hidden_dim=64):
         self.model_types = ['IC_FDNet', 'LP_FDNet', 'HyperNet', 'BayesNet', 'GaussHyperNet', 'MLPNet', 'DeepEnsembleNet'] if model_type is None else model_type
         self.seeds = seeds if seeds is not None else [random.randint(0, 1000) for _ in range(3)]
@@ -31,7 +32,7 @@ class Experiments:
 
     def run_experiments(self, x=np.linspace(start=-10,stop=10,num=500),
                             region_interp=(-1,1),
-                            frac_train=0.5, epochs=1000, warmup_epochs=500, beta_max=1.0, num_samples=100, analysis=True, save_switch=False):
+                            frac_train=0.5, epochs=1000, beta_param_dict=None, num_samples=100, analysis=True, save_switch=False):
         # Parameters
         model_types = self.model_types
         seeds = self.seeds
@@ -80,7 +81,7 @@ class Experiments:
 
                 # Train
                 start_time = time.time()
-                trainer.train(x=x_train, y=y_train, epochs=epochs, warmup_epochs=warmup_epochs, beta_max=beta_max)
+                trainer.train(x=x_train, y=y_train, epochs=epochs, beta_param_dict=beta_param_dict)
                 training_time = time.time() - start_time
 
                 # Evaluate
@@ -95,7 +96,7 @@ class Experiments:
                         save_dir = os.path.join("results", 'single_task_experiment', model_type, run_name)
                         
                         # Generate summary
-                        summary = get_summary(metric_outputs, y_test, model, desc, seed, training_time, epochs, warmup_epochs, x, region_interp, frac_train)
+                        summary = get_summary(metric_outputs, y_test, model, desc, seed, training_time, epochs, beta_param_dict, x, region_interp, frac_train)
 
                         # Save experiment output
                         save_experiment_outputs(metric_outputs, model, trainer, summary, x_train, y_train, x_test, y_test, save_dir)
@@ -148,41 +149,58 @@ class Experiments:
 if __name__ == "__main__":
     # Model type
     model_type = ['IC_FDNet', 'LP_FDNet', 'HyperNet', 'BayesNet', 'GaussHyperNet', 'MLPNet', 'DeepEnsembleNet'] 
-    # model_type = ['LP_FDNet'] 
+    model_type = ['DeepEnsembleNet', 'MLPNet', 'LP_FDNet'] 
     # Seeds
-    seeds = [7, 8, 9]
+    seeds = [random.randint(100,10000) for _ in range(3)]
     # Number of epochs
-    epochs = 10
+    epochs = 2
+    # Beta scheduler
+    beta_scheduler = "linear"
+    # Beta parameters
+    if beta_scheduler == "linear":
+        # Warm up epochs
+        warmup_epochs = round(epochs/2)
+        # Beta max
+        beta_max = 1.0
+        # Beta parameter dictionary
+        beta_param_dict = {"beta_scheduler": beta_scheduler,
+                           "warmup_epochs": warmup_epochs, "beta_max": beta_max}
+    elif beta_scheduler == "zero":
+        beta_param_dict = {"beta_scheduler": beta_scheduler}
     # Perform analysis 
     analysis = True
     # Save switch
-    save_switch = True
+    save_switch = False
     # Training region
     region_interp = (-1,1)
-    # Create data
-    input_type = "uniform_random"
-    input_seed = 1
-    x_min = -100
-    x_max = 100
-    n_interp = 100
-    n_extrap = 1000
-    if input_type == "uniform_random":
-        np.random.seed(input_seed)
-        x_l = np.random.uniform(low=x_min,high=region_interp[0],size=round(n_extrap/2)) 
-        x_c = np.random.uniform(low=region_interp[0],high=region_interp[1],size=n_interp)
-        x_r = np.random.uniform(low=region_interp[1],high=x_max,size=n_extrap-round(n_extrap/2))
-    else:
-        x_l = np.linspace(start=x_min,stop=region_interp[0],num=round(n_extrap/2))
-        x_c = np.linspace(start=region_interp[0],stop=region_interp[1],num=n_interp+2)
-        x_r = np.linspace(start=region_interp[1],stop=x_max,num=n_extrap-round(n_extrap/2))
-    x = np.sort(np.unique(np.concatenate([x_l, x_c, x_r])))
-    # Fraction of points of data points in region used for training
-    frac_train = 0.5
-    # Create experiment class instance
-    exp_class = Experiments(model_type=model_type, seeds=seeds)
-    # Run experiment
-    exp_class.run_experiments(x=x, region_interp=region_interp, frac_train=frac_train, epochs=epochs, analysis=analysis, save_switch=save_switch)
-    print('END')
+    # TAKE OUT THIS LOOP
+    for _ in range(300):
+        # DELETE THIS
+        seeds = [random.randint(100,10000) for _ in range(3)]
+        # Create data
+        input_type = "uniform_random"
+        input_seed = random.randint(100,10000)
+        x_min = -100
+        x_max = 100
+        n_interp = 1000
+        n_extrap = 10000
+        if input_type == "uniform_random":
+            np.random.seed(input_seed)
+            x_l = np.random.uniform(low=x_min,high=region_interp[0],size=round(n_extrap/2)) 
+            x_c = np.random.uniform(low=region_interp[0],high=region_interp[1],size=n_interp)
+            x_r = np.random.uniform(low=region_interp[1],high=x_max,size=n_extrap-round(n_extrap/2))
+        else:
+            x_l = np.linspace(start=x_min,stop=region_interp[0],num=round(n_extrap/2))
+            x_c = np.linspace(start=region_interp[0],stop=region_interp[1],num=n_interp+2)
+            x_r = np.linspace(start=region_interp[1],stop=x_max,num=n_extrap-round(n_extrap/2))
+        x = np.sort(np.unique(np.concatenate([x_l, x_c, x_r])))
+        # Fraction of points of data points in region used for training
+        frac_train = 0.5
+        # Create experiment class instance
+        exp_class = SingleTaskExperiment(model_type=model_type, seeds=seeds)
+        # Run experiment
+        exp_class.run_experiments(x=x, region_interp=region_interp, frac_train=frac_train, epochs=epochs, beta_param_dict=beta_param_dict, analysis=analysis, save_switch=save_switch)
+        print('END')
 
 
 # OLD CODE ========================================================================================================

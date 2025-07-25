@@ -4,9 +4,10 @@ import pickle
 import numpy as np
 
 from utils.general import get_latest_run_dir, extract_seed_from_dir, extract_timestamp_from_dir
+from data.toy_functions import generate_meta_task
 
 class SingleTaskRegressionLoader:
-    def __init__(self, model_type, seed, date_time, base_dir="results"):
+    def __init__(self, model_type, seed, date_time, base_dir="results//single_task_experiment"):
         """
         Utility to load metrics, losses, summaries, and input/output data.
 
@@ -100,6 +101,16 @@ def load_pickle_plot(pickle_path, show=True):
 
     return fig
 
+def load_toy_task_regression(seed=0):
+    x_c, y_c, x_t, y_t, desc = generate_meta_task(seed=seed)
+
+    # Convert to float64 explicitly
+    x_c = x_c.double()
+    y_c = y_c.double()
+    x_t = x_t.double()
+    y_t = y_t.double()
+
+    return x_c, y_c, x_t, y_t, {"description": desc}
 
 if __name__ == '__main__':
     # Imports
@@ -141,5 +152,9 @@ if __name__ == '__main__':
 
     # Test "get_latest_loader"
     loader = SingleTaskRegressionLoader.get_latest_loader(model_type)
+
+
+
+
     
 

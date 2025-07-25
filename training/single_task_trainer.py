@@ -13,12 +13,23 @@ class SingleTaskTrainer:
         self.model = model.double()
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
-        self.optimizer = optimizer or torch.optim.Adam(self.model.parameters(), lr=lr)
 
+        self.kl_models = {'IC_FDNet', 'LP_FDNet', 'BayesNet', 'GaussHyperNet'}
         self.losses = []
         self.mses = []
         self.kls = []
         self.betas = []
+
+        # Handle optimizer(s)
+        if model.__class__.__name__ == 'DeepEnsembleNetwork':
+            self.optimizers = [
+                torch.optim.Adam(submodel.parameters(), lr=lr)
+                for submodel in model.models
+            ]
+            self.optimizer = None  # Not used for ensembles
+        else:
+            self.optimizer = optimizer or torch.optim.Adam(self.model.parameters(), lr=lr)
+
 
     def _model_forward(self, x, return_kl=True, sample=True):
         if hasattr(self.model, 'forward') and ('return_kl' and 'sample' in self.model.forward.__code__.co_varnames):
@@ -26,11 +37,24 @@ class SingleTaskTrainer:
         else:
             return self.model(x), torch.tensor(0.0, device=x.device)
 
-    def train(self, x, y, epochs=1000, warmup_epochs=500, beta_max=1.0, print_every=100, batch_size=10, grad_clip=True):
-        x, y = x.to(self.device), y.to(self.device)
+    def train(self, x, y, epochs=1000, beta_param_dict=None,
+            print_every=100, batch_size=10, grad_clip=True, MC=1):
+
+        x, y = x.double().to(self.device), y.double().to(self.device)
         N = x.shape[0]
         if N == 0:
             raise ValueError("Empty context set provided.")
+        
+        # If beta parameter dictionary is None then default to linear
+        if beta_param_dict is None:
+            beta_scheduler = "linear"
+            # Warm up epochs
+            warmup_epochs = round(epochs/2)
+            # Beta max
+            beta_max = 1.0
+            # Beta parameter dictionary
+            beta_param_dict = {"beta_scheduler": beta_scheduler,
+                            "warmup_epochs": warmup_epochs, "beta_max": beta_max}
 
         dataset = TensorDataset(x, y)
         loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
@@ -40,35 +64,74 @@ class SingleTaskTrainer:
             total_loss = 0.0
             total_kl = 0.0
             total_mse = 0.0
-            beta = self._compute_beta(epoch, warmup_epochs, beta_max)
+            beta = self._compute_beta(epoch, beta_param_dict)
 
             for x_batch, y_batch in tqdm(loader, desc=f"Epoch {epoch}"):
                 x_batch, y_batch = x_batch.to(self.device), y_batch.to(self.device)
 
-                self.optimizer.zero_grad()
-                y_pred, kl = self._model_forward(x_batch)  # Assumes model outputs [B, D]
-                # DeepEnsemble case: average across ensemble members
-                if self.model.__class__.__name__ == 'DeepEnsembleNetwork':
-                    y_pred = y_pred.mean(dim=0)  # shape (B, D)
+                # ==== Monte Carlo stochastic models ====
+                if self.model.__class__.__name__ in self.kl_models:
+                    mse_total, kl_total = None, None
+                    for _ in range(MC):
+                        y_pred, kl = self._model_forward(x_batch)
+                        mse = F.mse_loss(y_pred, y_batch)
+                        mse_total = mse if mse_total is None else mse_total + mse
+                        kl_total = kl if kl_total is None else kl_total + kl
+                    mse = mse_total / MC
+                    kl = kl_total / MC
+                    loss = mse + beta * kl
 
-                mse = F.mse_loss(y_pred, y_batch)
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    if grad_clip:
+                        clip_grad_norm_(self.model.parameters(), 1.0)
+                    self.optimizer.step()
 
-                loss = mse + beta * kl
-                loss.backward()
-                if grad_clip:
-                    clip_grad_norm_(self.model.parameters(), 1.0)
-                self.optimizer.step()
+                # ==== Deep Ensemble ====
+                elif self.model.__class__.__name__ == 'DeepEnsembleNetwork':
+                    mse = 0.0
+                    loss = 0.0
+                    kl = torch.tensor(0.0, device=self.device)
 
-                total_loss += loss.detach().item() * x_batch.shape[0]  # Sum over samples
-                total_kl += kl.detach().item() * x_batch.shape[0]
-                total_mse += mse.detach().item() * x_batch.shape[0]
+                    for i, (submodel, subopt) in enumerate(zip(self.model.models, self.optimizers)):
+                        subopt.zero_grad()
+                        y_pred_i = submodel(x_batch)
+                        sub_loss = F.mse_loss(y_pred_i, y_batch)
+                        sub_loss.backward()
+                        if grad_clip:
+                            clip_grad_norm_(submodel.parameters(), 1.0)
+                        subopt.step()
 
-            # Normalize by dataset size
+                        loss += sub_loss.item() * x_batch.shape[0]
+                        mse += sub_loss.item() * x_batch.shape[0]
+
+                    loss /= len(self.model.models)
+                    mse /= len(self.model.models)
+
+                    loss = torch.tensor(loss, device=self.device)
+                    mse  = torch.tensor(mse, device=self.device)
+
+                # ==== Deterministic model ====
+                else:
+                    y_pred, kl = self._model_forward(x_batch)
+                    mse = F.mse_loss(y_pred, y_batch)
+                    loss = mse + beta * kl
+
+                    self.optimizer.zero_grad()
+                    loss.backward()
+                    if grad_clip:
+                        clip_grad_norm_(self.model.parameters(), 1.0)
+                    self.optimizer.step()
+
+                # Accumulate stats
+                total_loss += loss.item() * x_batch.shape[0]
+                total_mse  += mse.item() * x_batch.shape[0]
+                total_kl   += kl.item() * x_batch.shape[0]
+
             total_loss /= N
-            total_kl /= N
-            total_mse /= N
+            total_mse  /= N
+            total_kl   /= N
 
-            # Store for plotting
             self.losses.append(total_loss)
             self.mses.append(total_mse)
             self.kls.append(total_kl)
@@ -79,10 +142,9 @@ class SingleTaskTrainer:
 
     def evaluate(self, x, num_samples=30, sample=True):
         self.model.eval()
-        x = x.to(self.device)
+        x = x.double().to(self.device)
         N = x.shape[0]
         preds = []
-
 
         with torch.no_grad():
             if hasattr(self.model, 'forward') and ('return_kl' and 'sample' in self.model.forward.__code__.co_varnames):
@@ -97,8 +159,14 @@ class SingleTaskTrainer:
 
         return preds
     
-    def _compute_beta(self, epoch, warmup_epochs, beta_max):
-        return min(beta_max, epoch / warmup_epochs)
+    def _compute_beta(self, epoch, beta_param_dict):
+        beta_scheduler = beta_param_dict["beta_scheduler"]
+        if beta_scheduler == "zero":
+            return 0
+        elif beta_scheduler == "linear":
+            beta_max = beta_param_dict["beta_max"] 
+            warmup_epochs = beta_param_dict["warmup_epochs"]
+            return min(beta_max, epoch / warmup_epochs)
 
     # def plot_results(self, x_c, y_c, x_t, y_t, mean, std, desc=""):
     #     plot_loss_curve(self.losses, self.mses, self.kls, self.betas, desc=desc)

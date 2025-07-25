@@ -197,7 +197,7 @@ if __name__ == "__main__":
     if seed is not None:
         set_seed(seed=seed)
 
-    network = 'GaussHyperNet'
+    network = 'LP_FDNet'
 
     if network == 'IC_FDNet':
         model = IC_FDNetwork(input_dim, hidden_dim, output_dim, hyper_hidden_dim)
