@@ -310,10 +310,11 @@ def plot_prediction_histogram_waterfall(preds, x, y, bins=50, desc=None, save_di
                extent=[x.min(), x.max(), preds.min(), preds.max()],
                cmap='viridis')
     plt.colorbar(label='Density')
-    plt.plot(x,y)
+    plt.plot(x,y,c="red")
     plt.title(f"Prediction Histogram Waterfall: {desc}")
     plt.xlabel("x")
     plt.ylabel("y")
+    plt.ticklabel_format(style='plain')
     plt.tight_layout()
     if save_dir:
         save_plot(save_dir, "pred_waterfall_hist")

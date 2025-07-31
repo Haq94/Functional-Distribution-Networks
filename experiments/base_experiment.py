@@ -106,14 +106,7 @@ class BaseExperiment:
                                 training_time=training_time,
                                 save_dir=save_dir)
 
-        return preds, data, training_time, metric_outputs, trainer.model
-
-
-    # def get_capabilities(self, model_type):
-    #     capabilities = {"mean", "bias"}
-    #     if model_type not in self.no_variance_models:
-    #         capabilities |= {"residuals", "variance", "nll"}
-    #     return capabilities
+        return preds, data, training_time, metric_outputs, trainer
 
     def build_model(self, model_type, input_dim):
         from models.fdnet import IC_FDNetwork, LP_FDNetwork
@@ -181,6 +174,8 @@ if __name__ == "__main__":
     base_experiment = BaseExperiment(model_type=model_type, seed=seed)
     # Run experiment
     preds, data, training_time, metric_outputs, model = base_experiment.run_experiments(data_loader_fn=data_loader_fn)
+
+    print("Base Experiment Completed")
 
     # # TAKE OUT THIS LOOP
     # for _ in range(300):

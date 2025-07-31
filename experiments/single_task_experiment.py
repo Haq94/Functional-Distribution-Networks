@@ -3,20 +3,12 @@ import torch
 import numpy as np
 import random
 from datetime import datetime
-import time
 from tqdm import tqdm
 
 from experiments.base_experiment import BaseExperiment
 from data.toy_functions import sample_function
-from models.fdnet import IC_FDNetwork, LP_FDNetwork
-from models.hypernet import HyperNetwork
-from models.bayesnet import BayesNetwork
-from models.gausshypernet import GaussianHyperNetwork
-from models.mlpnet import DeterministicMLPNetwork
-from models.deepensemblenet import DeepEnsembleNetwork
-from training.single_task_trainer import SingleTaskTrainer
 from utils.saver import save_experiment_outputs
-from utils.metrics import metrics, get_summary
+from utils.metrics import get_summary
 from utils.plots import single_task_regression_plots
 
 class SingleTaskExperiment:
@@ -32,10 +24,14 @@ class SingleTaskExperiment:
 
     def run_experiments(self, x=np.linspace(start=-10,stop=10,num=500),
                             region_interp=(-1,1),
-                            frac_train=0.5, epochs=1000, beta_param_dict=None, num_samples=100, analysis=True, save_switch=False):
+                            frac_train=0.5, epochs=1000, beta_param_dict=None, 
+                            num_samples=100, MC=1, num_models=None, analysis=True, save_switch=False):
         # Parameters
         model_types = self.model_types
         seeds = self.seeds
+
+        if model_types == 'DeepEnsembleNet' and num_models is None:
+            num_models = num_samples
 
         # Make dir
         results_dir = "results"
@@ -73,22 +69,23 @@ class SingleTaskExperiment:
                 y_test = torch.tensor(f(x_test), dtype=torch.float64)
                 y_train = torch.tensor(f(x_train), dtype=torch.float64)
 
-                # Initiate model
-                model = self.build_model(model_type, input_dim=1)
+                # Base experiment instance
+                exp_inst = BaseExperiment(model_type=model_type, 
+                                          seed=seed, 
+                                          hidden_dim=self.hidden_dim, 
+                                          hyper_hidden_dim=self.hyper_hidden_dim, 
+                                          num_models=num_models
+                                          )
 
-                # Create training class instance
-                trainer = SingleTaskTrainer(model) 
-
-                # Train
-                start_time = time.time()
-                trainer.train(x=x_train, y=y_train, epochs=epochs, beta_param_dict=beta_param_dict)
-                training_time = time.time() - start_time
-
-                # Evaluate
-                preds = trainer.evaluate(x=x_test, num_samples=num_samples)
-
-                # Metrics
-                metric_outputs = metrics(preds, y_test, eps=1e-6)
+                # Run experiment
+                data = (x_train, y_train, x_test, y_test, desc)
+                preds, data, training_time, metric_outputs, trainer = exp_inst.run_experiments(
+                        data=data,
+                        epochs=epochs,
+                        beta_param_dict=beta_param_dict,
+                        num_samples=num_samples,
+                        MC = MC
+                        )
 
                 if analysis:    
                     if save_switch:
@@ -96,13 +93,13 @@ class SingleTaskExperiment:
                         save_dir = os.path.join("results", 'single_task_experiment', model_type, run_name)
                         
                         # Generate summary
-                        summary = get_summary(metric_outputs, y_test, model, desc, seed, training_time, epochs, beta_param_dict, x, region_interp, frac_train)
+                        summary = get_summary(metric_outputs, y_test, trainer.model, desc, seed, training_time, epochs, beta_param_dict, x, region_interp, frac_train)
 
                         # Save experiment output
-                        save_experiment_outputs(metric_outputs, model, trainer, summary, x_train, y_train, x_test, y_test, save_dir)
+                        save_experiment_outputs(metric_outputs, trainer.model, trainer, summary, x_train, y_train, x_test, y_test, save_dir)
 
                     # Plot and save visuals
-                    name = desc + ', Model: ' + model.__class__.__name__
+                    name = desc + ', Model: ' + model_type
                     plot_save_dir = None if save_dir is None else os.path.join(save_dir, "plots")
                     capabilities = self.get_capabilities(model_type)
                     single_task_regression_plots(trainer, preds, x_train, y_train, x_test, y_test, name, ind_train, region_interp, metric_outputs=metric_outputs, block=False, save_dir=plot_save_dir, capabilities=capabilities)
@@ -115,45 +112,21 @@ class SingleTaskExperiment:
             capabilities |= {"residuals", "variance", "nll"}
         return capabilities
 
-    def build_model(self, model_type, input_dim=1):
-        hidden_dim = self.hidden_dim
-        hyper_hidden_dim = self.hyper_hidden_dim
-        if model_type == 'IC_FDNet':
-            return IC_FDNetwork(input_dim, hidden_dim, input_dim, hyper_hidden_dim)
-        elif model_type == 'LP_FDNet':
-            return LP_FDNetwork(input_dim, hidden_dim, input_dim, hyper_hidden_dim)
-        elif model_type == 'HyperNet':
-            return HyperNetwork(input_dim, hidden_dim, input_dim, hyper_hidden_dim)
-        elif model_type == 'BayesNet':
-            return BayesNetwork(input_dim, hidden_dim, input_dim)
-        elif model_type == 'GaussHyperNet':
-            return GaussianHyperNetwork(input_dim, hidden_dim, input_dim, hyper_hidden_dim)
-        elif model_type == 'MLPNet':
-            return DeterministicMLPNetwork(input_dim, hidden_dim, input_dim, dropout_rate=0.1)
-        elif model_type == 'DeepEnsembleNet':
-            num_models = 100
-            seed_list = [random.randint(0, 10*num_models) for _ in range(num_models)]
-            return DeepEnsembleNetwork(
-                network_class=DeterministicMLPNetwork,
-                num_models=num_models,
-                seed_list=seed_list,
-                input_dim=input_dim,
-                hidden_dim=hidden_dim,
-                output_dim=input_dim,
-                dropout_rate=0.1
-            )
-        else:
-            raise ValueError(f"Unknown model type: {model_type}")
-
-
 if __name__ == "__main__":
     # Model type
     model_type = ['IC_FDNet', 'LP_FDNet', 'HyperNet', 'BayesNet', 'GaussHyperNet', 'MLPNet', 'DeepEnsembleNet'] 
-    model_type = ['DeepEnsembleNet', 'MLPNet', 'LP_FDNet'] 
+    # model_type = ['DeepEnsembleNet', 'MLPNet', 'LP_FDNet'] 
+    # model_type = ['LP_FDNet'] 
     # Seeds
-    seeds = [random.randint(100,10000) for _ in range(3)]
+    seeds = [random.randint(100,10000) for _ in range(1)]
     # Number of epochs
     epochs = 2
+    # Number of samples used in inference
+    num_samples = 100
+    # Number of Monte-Carlo trials used for training
+    MC = 2
+    # Number of models for Deep Ensemble
+    num_models = 10
     # Beta scheduler
     beta_scheduler = "linear"
     # Beta parameters
@@ -170,37 +143,37 @@ if __name__ == "__main__":
     # Perform analysis 
     analysis = True
     # Save switch
-    save_switch = False
+    save_switch = True
     # Training region
     region_interp = (-1,1)
-    # TAKE OUT THIS LOOP
-    for _ in range(300):
-        # DELETE THIS
-        seeds = [random.randint(100,10000) for _ in range(3)]
-        # Create data
-        input_type = "uniform_random"
-        input_seed = random.randint(100,10000)
-        x_min = -100
-        x_max = 100
-        n_interp = 1000
-        n_extrap = 10000
-        if input_type == "uniform_random":
-            np.random.seed(input_seed)
-            x_l = np.random.uniform(low=x_min,high=region_interp[0],size=round(n_extrap/2)) 
-            x_c = np.random.uniform(low=region_interp[0],high=region_interp[1],size=n_interp)
-            x_r = np.random.uniform(low=region_interp[1],high=x_max,size=n_extrap-round(n_extrap/2))
-        else:
-            x_l = np.linspace(start=x_min,stop=region_interp[0],num=round(n_extrap/2))
-            x_c = np.linspace(start=region_interp[0],stop=region_interp[1],num=n_interp+2)
-            x_r = np.linspace(start=region_interp[1],stop=x_max,num=n_extrap-round(n_extrap/2))
-        x = np.sort(np.unique(np.concatenate([x_l, x_c, x_r])))
-        # Fraction of points of data points in region used for training
-        frac_train = 0.5
-        # Create experiment class instance
-        exp_class = SingleTaskExperiment(model_type=model_type, seeds=seeds)
-        # Run experiment
-        exp_class.run_experiments(x=x, region_interp=region_interp, frac_train=frac_train, epochs=epochs, beta_param_dict=beta_param_dict, analysis=analysis, save_switch=save_switch)
-        print('END')
+    # Create data
+    input_type = "uniform_random"
+    input_seed = random.randint(100,10000)
+    x_min = -100
+    x_max = 100
+    n_interp = 10
+    n_extrap = 100
+    if input_type == "uniform_random":
+        np.random.seed(input_seed)
+        x_l = np.random.uniform(low=x_min,high=region_interp[0],size=round(n_extrap/2)) 
+        x_c = np.random.uniform(low=region_interp[0],high=region_interp[1],size=n_interp)
+        x_r = np.random.uniform(low=region_interp[1],high=x_max,size=n_extrap-round(n_extrap/2))
+    else:
+        x_l = np.linspace(start=x_min,stop=region_interp[0],num=round(n_extrap/2))
+        x_c = np.linspace(start=region_interp[0],stop=region_interp[1],num=n_interp+2)
+        x_r = np.linspace(start=region_interp[1],stop=x_max,num=n_extrap-round(n_extrap/2))
+    x = np.sort(np.unique(np.concatenate([x_l, x_c, x_r])))
+    # Fraction of points of data points in region used for training
+    frac_train = 0.5
+    # Create experiment class instance
+    exp_class = SingleTaskExperiment(model_type=model_type, seeds=seeds)
+    # Run experiment
+    exp_class.run_experiments(x=x, region_interp=region_interp, frac_train=frac_train,
+                                epochs=epochs, beta_param_dict=beta_param_dict,
+                                    num_samples=num_samples, MC=MC, num_models=num_models,
+                                    analysis=analysis, save_switch=save_switch
+                                    )
+    print('Single Task Experiment Completed')
 
 
 # OLD CODE ========================================================================================================

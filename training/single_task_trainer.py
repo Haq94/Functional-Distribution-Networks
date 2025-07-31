@@ -159,14 +159,53 @@ class SingleTaskTrainer:
 
         return preds
     
+    # def _compute_beta(self, epoch, beta_param_dict):
+    #     beta_scheduler = beta_param_dict["beta_scheduler"]
+    #     if beta_scheduler == "zero":
+    #         return 0
+    #     elif beta_scheduler == "linear":
+    #         beta_max = beta_param_dict["beta_max"] 
+    #         warmup_epochs = beta_param_dict["warmup_epochs"]
+    #         return min(beta_max, epoch / warmup_epochs)
+        
     def _compute_beta(self, epoch, beta_param_dict):
+        """
+        Compute the beta value at a given epoch based on the beta scheduling strategy.
+
+        Args:
+            epoch (int): Current epoch
+            beta_param_dict (dict): Dictionary containing:
+                - beta_scheduler: str, one of ['zero', 'constant', 'linear', 'cosine', 'sigmoid']
+                - beta_max: float
+                - warmup_epochs: int
+
+        Returns:
+            float: Beta value for this epoch
+        """
         beta_scheduler = beta_param_dict["beta_scheduler"]
-        if beta_scheduler == "zero":
-            return 0
-        elif beta_scheduler == "linear":
-            beta_max = beta_param_dict["beta_max"] 
-            warmup_epochs = beta_param_dict["warmup_epochs"]
-            return min(beta_max, epoch / warmup_epochs)
+        beta_max = beta_param_dict["beta_max"]
+        warmup_epochs = beta_param_dict["warmup_epochs"]
+
+        if beta_scheduler == "constant":
+            return beta_max
+
+        progress = min(epoch / warmup_epochs, 1.0)
+
+        if beta_scheduler == "linear":
+            return beta_max * progress
+
+        elif beta_scheduler == "cosine":
+            return beta_max * (1 - np.cos(np.pi * progress)) / 2
+
+        elif beta_scheduler == "sigmoid":
+            slope = 12  # Adjust for steepness
+            midpoint = 0.5
+            sigmoid_val = 1 / (1 + np.exp(-slope * (progress - midpoint)))
+            sigmoid_norm = sigmoid_val / (1 / (1 + np.exp(-slope * (1 - midpoint))))  # normalize to hit beta_max
+            return beta_max * sigmoid_norm
+
+        else:
+            raise ValueError(f"Unsupported beta scheduler: {beta_scheduler}")
 
     # def plot_results(self, x_c, y_c, x_t, y_t, mean, std, desc=""):
     #     plot_loss_curve(self.losses, self.mses, self.kls, self.betas, desc=desc)
