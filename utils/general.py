@@ -1,7 +1,7 @@
 import os
 import re
 
-def get_latest_run_dir(model_name, base_dir="results"):
+def get_latest_run_dir(model_name, base_dir="results//single_task_experiment"):
     subdirs = [
         os.path.join(base_dir, model_name, d)
         for d in os.listdir(os.path.join(base_dir, model_name))

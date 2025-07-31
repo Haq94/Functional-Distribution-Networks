@@ -1,0 +1,11 @@
+{
+    "training_time_sec": 3.9490761756896973,
+    "metadata": {
+        "description": "quad (a=-0.56, b=-0.87)"
+    },
+    "model_type": "LP_FDNet",
+    "seed": 6058,
+    "hidden_dim": 32,
+    "hyper_hidden_dim": 64,
+    "num_models": 5
+}

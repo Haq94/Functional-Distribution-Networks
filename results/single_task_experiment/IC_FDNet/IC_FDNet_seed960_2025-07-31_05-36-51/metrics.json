@@ -1,0 +1,22 @@
+{
+    "desc": "quad (a=-0.85, b=-0.70)",
+    "model": "IC_FDNetwork",
+    "seed": 960,
+    "rmse": 95195.62254636463,
+    "mean_nll": 10.432723921981966,
+    "training_time": 0.021193504333496094,
+    "timestamp": "2025-07-31T05:36:54.541467",
+    "epochs": 2,
+    "beta_param_dict": {
+        "beta_scheduler": "linear",
+        "warmup_epochs": 1,
+        "beta_max": 1.0
+    },
+    "x_min": -99.1750285122823,
+    "x_max": 98.55372093087671,
+    "region_interp": [
+        -1,
+        1
+    ],
+    "frac_train": 0.5
+}

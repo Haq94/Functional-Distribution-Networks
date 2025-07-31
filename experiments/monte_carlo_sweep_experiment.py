@@ -14,9 +14,9 @@ from models.gausshypernet import GaussianHyperNetwork
 from models.mlpnet import DeterministicMLPNetwork
 from models.deepensemblenet import DeepEnsembleNetwork
 from training.single_task_trainer import SingleTaskTrainer
-from utils.saver import save_experiment_outputs
+from utils.general_saver import save_experiment_outputs
 from utils.metrics import metrics, get_summary
-from utils.plots import single_task_regression_plots
+from utils.single_task_plots import single_task_regression_plots
 
 class Experiments:
     def __init__(self, model_type=None, seeds=None, hidden_dim=32, hyper_hidden_dim=64):

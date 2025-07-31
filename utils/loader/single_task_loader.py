@@ -1,12 +1,10 @@
 import os
 import json
-import pickle
 import numpy as np
 
 from utils.general import get_latest_run_dir, extract_seed_from_dir, extract_timestamp_from_dir
-from data.toy_functions import generate_meta_task
 
-class SingleTaskRegressionLoader:
+class SingleTaskExperimentLoader:
     def __init__(self, model_type, seed, date_time, base_dir="results//single_task_experiment"):
         """
         Utility to load metrics, losses, summaries, and input/output data.
@@ -73,44 +71,14 @@ class SingleTaskRegressionLoader:
         }
     
     @staticmethod
-    def get_latest_loader(model_type, base_dir="results"):
+    def get_latest_loader(model_type, base_dir="results//single_task_experiment"):
         run_dir = get_latest_run_dir(model_type, base_dir=base_dir)
         if run_dir:
             seed = extract_seed_from_dir(run_dir)  # optional utility
             date_time = extract_timestamp_from_dir(run_dir)  # optional utility
-            return SingleTaskRegressionLoader(model_type, seed, date_time, base_dir)
+            return SingleTaskExperimentLoader(model_type, seed, date_time, base_dir)
         else:
             return None
-
-def load_pickle_plot(pickle_path, show=True):
-    """
-    Load and optionally display a matplotlib figure saved as a .pkl file.
-
-    Args:
-        pickle_path (str): Path to the .pkl file.
-        show (bool): Whether to display the plot immediately.
-
-    Returns:
-        matplotlib.figure.Figure: The loaded figure object.
-    """
-    with open(pickle_path, "rb") as f:
-        fig = pickle.load(f)
-
-    if show:
-        fig.show()
-
-    return fig
-
-def load_toy_task_regression(seed=0):
-    x_c, y_c, x_t, y_t, desc = generate_meta_task(seed=seed)
-
-    # Convert to float64 explicitly
-    x_c = x_c.double()
-    y_c = y_c.double()
-    x_t = x_t.double()
-    y_t = y_t.double()
-
-    return x_c, y_c, x_t, y_t, {"description": desc}
 
 if __name__ == '__main__':
     # Imports
@@ -123,20 +91,10 @@ if __name__ == '__main__':
     # Get latest run directory
     run_dir = get_latest_run_dir(model_type)
 
-    if run_dir:
-        plot_path = os.path.join(run_dir, "plots", f"{metric}.pkl")
-        print("Trying:", plot_path)
-        if os.path.exists(plot_path):
-            fig = load_pickle_plot(plot_path)
-        else:
-            print("File not found at path.")
-    else:
-        print("No run directories found for this model.")
-
     # Create instance
     seed = extract_seed_from_dir(run_dir)
     date_time = extract_timestamp_from_dir(run_dir)
-    loader = SingleTaskRegressionLoader(model_type, seed, date_time, base_dir="results")
+    loader = SingleTaskExperimentLoader(model_type, seed, date_time, base_dir="results//single_task_experiment")
 
     # Load metrics
     metrics = loader.load_metrics()
@@ -151,7 +109,7 @@ if __name__ == '__main__':
     data = loader.load_data()
 
     # Test "get_latest_loader"
-    loader = SingleTaskRegressionLoader.get_latest_loader(model_type)
+    loader = SingleTaskExperimentLoader.get_latest_loader(model_type)
 
 
 

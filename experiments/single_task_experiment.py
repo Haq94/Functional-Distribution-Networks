@@ -7,9 +7,9 @@ from tqdm import tqdm
 
 from experiments.base_experiment import BaseExperiment
 from data.toy_functions import sample_function
-from utils.saver import save_experiment_outputs
+from utils.saver.single_task_saver import single_task_saver
 from utils.metrics import get_summary
-from utils.plots import single_task_regression_plots
+from utils.plots.single_task_plots import single_task_plots
 
 class SingleTaskExperiment:
     def __init__(self, model_type=None, seeds=None, hidden_dim=32, hyper_hidden_dim=64):
@@ -96,13 +96,13 @@ class SingleTaskExperiment:
                         summary = get_summary(metric_outputs, y_test, trainer.model, desc, seed, training_time, epochs, beta_param_dict, x, region_interp, frac_train)
 
                         # Save experiment output
-                        save_experiment_outputs(metric_outputs, trainer.model, trainer, summary, x_train, y_train, x_test, y_test, save_dir)
+                        single_task_saver(metric_outputs, trainer.model, trainer, summary, x_train, y_train, x_test, y_test, save_dir)
 
                     # Plot and save visuals
                     name = desc + ', Model: ' + model_type
                     plot_save_dir = None if save_dir is None else os.path.join(save_dir, "plots")
                     capabilities = self.get_capabilities(model_type)
-                    single_task_regression_plots(trainer, preds, x_train, y_train, x_test, y_test, name, ind_train, region_interp, metric_outputs=metric_outputs, block=False, save_dir=plot_save_dir, capabilities=capabilities)
+                    single_task_plots(trainer, preds, x_train, y_train, x_test, y_test, name, ind_train, region_interp, metric_outputs=metric_outputs, block=False, save_dir=plot_save_dir, capabilities=capabilities)
                     
             print(f"Completed: {model_type} | seed: {seed} | training time: {training_time}s")
 
@@ -174,200 +174,3 @@ if __name__ == "__main__":
                                     analysis=analysis, save_switch=save_switch
                                     )
     print('Single Task Experiment Completed')
-
-
-# OLD CODE ========================================================================================================
-
-# def Bias_Var_Debug_Func(preds, y_t_np):
-
-#     N = preds.shape[0]
-#     S = preds.shape[1]
-
-#     mean = np.zeros(S)
-#     var = np.zeros(S)
-#     bias = np.zeros(S)
-#     mse = np.zeros(S)
-#     bias_var_diff = np.zeros(S)
-
-#     for n in range(S):
-#         yn = preds[:,n,:]
-#         yn = yn.squeeze()
-#         yn = yn.astype(np.float64)
-
-#         truth_n = y_t_np[n]
-#         truth_n = truth_n.astype(np.float64)
-
-#         mean_n = yn.mean()
-#         var_n = yn.var()
-#         bias_n = mean_n - truth_n
-#         mse_n = np.mean((yn - truth_n)**2)
-#         bias_var_diff_n = abs(mse_n - (bias_n**2 + var_n))
-
-#         mean[n] = mean_n
-#         var[n] = var_n
-#         bias[n] = bias_n
-#         mse[n] = mse_n
-#         bias_var_diff[n] = bias_var_diff_n  
-
-#     return mean, var, bias, mse, bias_var_diff
-
-# def plots(preds, x_c, y_c, x_t, y_t, desc, ind_c, block=False):
-    
-#     import matplotlib.pyplot as plt
-#     # Convert all arrays from torch tensors to numpy arrays
-#     x_c_np = x_c.cpu().numpy().squeeze().astype(np.float64)
-#     y_c_np = y_c.cpu().numpy().squeeze().astype(np.float64)
-#     x_t_np = x_t.cpu().numpy().squeeze().astype(np.float64)
-#     y_t_np = y_t.cpu().numpy().squeeze().astype(np.float64)
-#     preds_np = preds.astype(np.float64)
-#     x_c_min = x_c_np.min()
-#     x_c_max = x_c_np.max()
-
-#     mean, var, std, res_prec, res_acc, bias, mse, bias_var_diff, nll = metrics(preds_np, y_t_np)
-
-#     # # DEBUG
-#     # mean_db, var_db, bias_db, mse_db, bias_var_diff_db = Bias_Var_Debug_Func(preds, y_t_np)
-
-#     # plt.figure(figsize=(8, 4))
-#     # plt.plot(x_t_np, bias_var_diff)
-#     # plt.title("Array Plot")
-#     # plt.xlabel("Index")
-#     # plt.ylabel("Value")
-#     # plt.legend()
-#     # plt.grid(True)
-#     # plt.tight_layout()
-#     # # plt.show()
-    
-
-#     # plt.figure(figsize=(8, 4))
-#     # plt.plot(mse, label='MSE')
-#     # plt.plot(var.squeeze(), label='Var')
-#     # plt.plot(mse - var.squeeze(), label="Diff")
-#     # plt.title("Array Plot")
-#     # plt.xlabel("Index")
-#     # plt.ylabel("Value")
-#     # plt.legend()
-#     # plt.grid(True)
-#     # plt.tight_layout()
-#     # # plt.show()
-
-
-#     # plt.figure(figsize=(8, 4))
-#     # plt.plot(mse, label='MSE')
-#     # plt.plot(var.squeeze() + bias**2, label='Var+Bias**2')
-#     # plt.plot(mse - (var.squeeze() + bias**2), label="Diff")
-#     # plt.title("Array Plot")
-#     # plt.xlabel("Index")
-#     # plt.ylabel("Value")
-#     # plt.legend()
-#     # plt.grid(True)
-#     # plt.tight_layout()
-#     # # plt.show()
-
-#     #####################
-
-#     # Residual Scatter Plots 
-#     _, axs = plt.subplots(2, 1, num="Residual Scatter Plot", figsize=(10, 8), sharex=True)
-
-#     for ii in range(res_prec.shape[1]):
-#         axs[0].scatter(x_t, res_prec[:, ii], alpha=0.05, color=np.random.rand(3))
-#     axs[0].axvline(x=x_c_min, color='red', linestyle='--', linewidth=2)
-#     axs[0].axvline(x=x_c_max, color='red', linestyle='--', linewidth=2)
-#     axs[0].set_title(f"Residual Precision Task: {desc}")
-#     axs[0].legend()
-#     axs[0].grid(True)
-
-#     for ii in range(res_acc.shape[1]):
-#         axs[1].scatter(x_t, res_acc[:, ii], alpha=0.05, color=np.random.rand(3))
-#     axs[1].plot(x_t_np, bias, label='Bias', color='red')
-#     axs[1].axvline(x=x_c_min, color='red', linestyle='--', linewidth=2)
-#     axs[1].axvline(x=x_c_max, color='red', linestyle='--', linewidth=2)
-#     axs[1].set_title(f"Residual Accuracy Task: {desc}")
-#     axs[1].legend()
-#     axs[1].grid(True)
-
-#     plt.tight_layout()
-#     plt.show(block=block)
-
-#     # Mean Prediction Plot
-#     plt.figure(num="Mean Prediction Plot", figsize=(10, 8))
-#     for ii in range(res_acc.shape[1]):
-#         plt.scatter(x_t, preds[ii, :], alpha=0.05, color=np.random.rand(3))
-#     plt.plot(x_t_np, y_t_np, label="Ground Truth", linestyle="--")
-#     plt.plot(x_t_np, mean, label="Mean Prediction")
-#     plt.fill_between(x_t_np, mean - std, mean + std,
-#                     alpha=0.3, label="±1 Std Dev")
-#     plt.scatter(x_c_np, y_c_np, color="red", label="Context Points")
-#     plt.axvline(x=x_c_min, color='red', linestyle='--', linewidth=2)
-#     plt.axvline(x=x_c_max, color='red', linestyle='--', linewidth=2)
-#     plt.title(f"Mean Function Task: {desc}")
-#     plt.legend()
-#     plt.grid(True)
-#     plt.show(block=block)
-
-#     # Zoomed in Mean Prediction Plot
-#     plt.figure(num="Zoomed in Mean Prediction Plot", figsize=(10, 8))
-#     for ii in range(res_acc.shape[1]):
-#         plt.scatter(x_t, preds[ii, :], alpha=0.05, color=np.random.rand(3))
-#     plt.plot(x_t_np, y_t_np, label="Ground Truth", linestyle="--")
-#     plt.plot(x_t_np, mean, label="Mean Prediction")
-#     plt.fill_between(x_t_np, mean - std, mean + std, alpha=0.3, label="±1 Std Dev")
-#     plt.scatter(x_c_np, y_c_np, color="red", alpha=0.5, label="Context Points")
-#     plt.axvline(x=x_c_min, color='red', linestyle='--', linewidth=2)
-#     plt.axvline(x=x_c_max, color='red', linestyle='--', linewidth=2)
-#     plt.xlabel("x")
-#     plt.ylabel("y")
-#     plt.ylim(mean.min(), mean.max())
-#     plt.title(f'Mean Function Task: {desc} (Zoomed In)')
-#     plt.legend()
-#     plt.show(block=block)
-
-#     # Variance and Mean Plot
-#     _, axs1 = plt.subplots(2, 1, num="Variance and Mean Plot", figsize=(10, 8), sharex=True)
-
-#     axs1[0].plot(x_t_np, mean)
-#     axs1[0].scatter(x_t_np[ind_c], mean[ind_c], label='Context Points', color='red')
-#     axs1[0].axvline(x=x_c_min, color='red', linestyle='--', linewidth=2)
-#     axs1[0].axvline(x=x_c_max, color='red', linestyle='--', linewidth=2)
-#     axs1[0].set_title(f"Mean Function Task: {desc}")
-#     axs1[0].legend()
-#     axs1[0].grid(True)
-
-#     axs1[1].plot(x_t_np, 10*np.log10(var))
-#     axs1[1].scatter(x_t_np[ind_c], 10*np.log10(var[ind_c]),label='Context Points', color='red')
-#     axs1[1].axvline(x=x_c_min, color='red', linestyle='--', linewidth=2)
-#     axs1[1].axvline(x=x_c_max, color='red', linestyle='--', linewidth=2)
-#     axs1[1].set_title(f"Variance (dB) Task: {desc}")
-#     axs1[1].legend()
-#     axs1[1].grid(True)
-
-#     plt.tight_layout()
-#     plt.show(block=block)
-
-#     # MSE and Bias Plot
-#     _, axs2 = plt.subplots(2, 1, num="Bias and MSE Plot", figsize=(10, 8), sharex=True)
-
-#     axs2[0].plot(x_t_np, bias)
-#     axs2[0].scatter(x_t_np[ind_c], bias[ind_c], label='Context Points', color='red')
-#     axs2[0].axvline(x=x_c_min, color='red', linestyle='--', linewidth=2)
-#     axs2[0].axvline(x=x_c_max, color='red', linestyle='--', linewidth=2)
-#     axs2[0].set_title(f"Bias Task: {desc}")
-#     axs2[0].legend()
-#     axs2[0].grid(True)
-
-#     axs2[1].plot(x_t_np, 10*np.log10(mse))
-#     axs2[1].scatter(x_t_np[ind_c], 10*np.log10(mse[ind_c]), label='Context Points', color='red')
-#     axs2[1].axvline(x=x_c_min, color='red', linestyle='--', linewidth=2)
-#     axs2[1].axvline(x=x_c_max, color='red', linestyle='--', linewidth=2)
-#     axs2[1].set_title(f"MSE (dB) Task: {desc}")
-#     axs2[1].legend()
-#     axs2[1].grid(True)
-
-#     plt.tight_layout()
-#     plt.show(block=block)
-
-#     if block == False:
-#         plt.pause(0.5) 
-#     plt.close('all')
-
-#     print('stop')
