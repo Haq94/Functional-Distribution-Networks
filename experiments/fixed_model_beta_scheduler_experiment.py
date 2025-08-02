@@ -7,8 +7,9 @@ from tqdm import tqdm
 
 from experiments.base_experiment import BaseExperiment
 from data.toy_functions import sample_function
-from utils.loader.fixed_model_beta_scheduler_loader import load_all_scheduler_metrics
-from utils.plots.fixed_model_beta_scheduler_plots import plot_mse_vs_beta
+from data.toy_functions import generate_grid 
+from utils.loader.fixed_model_beta_scheduler_loader import load_scheduler_metrics, get_metric
+from utils.plots.fixed_model_beta_scheduler_plots import plot_training_metrics_overlay, plot_final_metrics_vs_x_overlay
 
 class FixedModelBetaSchedulerExperiment:
     def __init__(self, model_type=None, seeds=None, hidden_dim=32, hyper_hidden_dim=64):
@@ -25,7 +26,7 @@ class FixedModelBetaSchedulerExperiment:
                             region_interp=(-1,1),
                             frac_train=0.5, epochs=1000,
                             beta_scheduler_types=["constant"], beta_max_arr=[1], warmup_epochs_arr=[500], 
-                            num_samples=100, MC=1, analysis=True, save_switch=False):
+                            num_samples=100, MC=1, analysis=True, save_switch=False, run_analysis=True):
         # Parameters
         model_types = self.model_types
         seeds = self.seeds
@@ -37,10 +38,15 @@ class FixedModelBetaSchedulerExperiment:
         # Date and time stamp for run name
         date_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 
+        # Allocate dict for data
+        metrics_dicts = {}
         for seed in seeds:
             # Set seed
             torch.manual_seed(seed)
             np.random.seed(seed)
+
+            # Allocate seed
+            metrics_dicts[seed] = {}
 
             # Define interpolation and extrapolation region
             ind_interp = np.where((x >= region_interp[0]) & (x <= region_interp[1]))[0]
@@ -64,15 +70,18 @@ class FixedModelBetaSchedulerExperiment:
             
             # Generate metrics and save
             for model_type in model_types:
+                # Allocate model
+                metrics_dicts[seed][model_type] = {}
                 for beta_scheduler in beta_scheduler_types:
+                    # Allocate beta scheduler
+                    metrics_dicts[seed][model_type][beta_scheduler] = {}
                     for beta_max in beta_max_arr:
+                        # Allocate beta max
+                        metrics_dicts[seed][model_type][beta_scheduler][beta_max] = {}
                         for warmup_epochs in warmup_epochs_arr:
                             # Beta dictionary
                             beta_param_dict = {"beta_scheduler": beta_scheduler,
                                             "warmup_epochs": warmup_epochs, "beta_max": beta_max}
-
-                            # Save dir
-                            save_dir = self.format_run_path(seed, model_type, beta_scheduler, beta_max, warmup_epochs)
 
                             # Base experiment instance
                             exp_inst = BaseExperiment(model_type=model_type, 
@@ -109,28 +118,55 @@ class FixedModelBetaSchedulerExperiment:
                                     "warmup_epochs": warmup_epochs,
                                     "seed": seed,
                                     "model_type": model_type,
-                                    "x_values": x.cpu().numpy() if torch.is_tensor(x) else x  # save input domain
+                                    "x_values": x.cpu().numpy() if torch.is_tensor(x) else x,
+                                    "y_values": y_test.cpu().numpy() if torch.is_tensor(y_test) else y_test,
+                                    "interp_region": region_interp,
+                                    "frac_train": frac_train,
+                                    "MC": MC,
+                                    "num_samples": num_samples
                                 }
+                                # Store data
+                                metrics_dicts[seed][model_type][beta_scheduler][beta_max][warmup_epochs] = metrics_dict
 
-                                if save_switch:
-                                    # Save metrics
-                                    os.makedirs(save_dir, exist_ok=True)
-                                    np.savez(os.path.join(save_dir, "metrics.npz"), **metrics_dict)
-        
-        # Run analysis
-        self.run_analysis()
 
-    def run_analysis(self):
-        # Parameters+
-        
-        model_types = self.model_types
-        seeds = self.seeds
-        # Load metrics
-        data = load_all_scheduler_metrics()
-        # Only keep data with the correct seed and model type
-        data = data[seeds]
-        # Perform Loss, MSE, KL, and Beta plots per model
-        plot_mse_vs_beta(data, model_type="IC_FDNet", warmup_epochs=50)
+        # Save metrics dict
+        if save_switch:
+            save_dir = os.path.join("results", "fixed_model_beta_scheduler_experiment", f"run_{date_time}")
+            os.makedirs(save_dir, exist_ok=True)
+            np.savez_compressed(os.path.join(save_dir, "metrics_dict.npz"), metrics_dicts=metrics_dicts)
+
+        if run_analysis:
+            plot_final_metrics_vs_x_overlay(metrics_dicts, seeds, save_dir=save_dir, beta_scheduler_types=beta_scheduler_types, beta_max_arr=beta_max_arr, warmup_epochs_arr=warmup_epochs_arr)
+            # Plot training metrics
+            plot_training_metrics_overlay(
+                metrics_dicts=metrics_dicts,
+                seeds=seeds,
+                beta_max_arr=beta_max_arr,
+                beta_scheduler_types=beta_scheduler_types,
+                warmup_epochs_arr=warmup_epochs_arr,
+                save_dir=os.path.join(save_dir,'plots')
+            )
+
+
+    def run_analysis(self, metrics_dicts=None, save_dir=None, run_name=None):
+        """
+        Load or reuse the metrics dict and dispatch plots.
+
+        Args:
+            metrics_dicts (dict or None): If None, loads from run_name or save_dir.
+            save_dir (str or None): Path to directory with metrics_dict.npz.
+            run_name (str or None): Optional run name string to infer save_dir.
+        """
+        # Infer save_dir if needed 
+        if save_dir is None and run_name is not None:
+            save_dir = os.path.join("results", "fixed_model_beta_scheduler_experiment", run_name)
+
+        # Load if not passed
+        if metrics_dicts is None:
+            assert save_dir is not None, "You must specify save_dir or provide metrics_dicts"
+            path = os.path.join(save_dir, "metrics_dict.npz")
+            metrics_dicts = np.load(path, allow_pickle=True)["metrics_dicts"].item()
+
 
     def get_capabilities(self, model_type):
         capabilities = {"mean", "bias"}  # always
@@ -149,15 +185,15 @@ if __name__ == "__main__":
     # Seeds
     seeds = [random.randint(100,10000) for _ in range(1)]
     # Number of epochs
-    epochs = 100
+    epochs = 1000
     # Number of samples used in inference
     num_samples = 100
     # Number of Monte-Carlo trials used for training
-    MC = 2
+    MC = 1
     # Beta scheduler types
     beta_scheduler_types = ["linear", "cosine", "sigmoid", "constant"]
     # Beta max array
-    beta_max_arr = np.linspace(start=0.1, stop=1, num=1)
+    beta_max_arr = np.linspace(start=1, stop=1, num=1)
     # Warmup epochs array
     warmup_epochs_arr = np.unique(np.round(np.array([0.5])*epochs))
     # Perform analysis 
@@ -173,16 +209,7 @@ if __name__ == "__main__":
     x_max = 100
     n_interp = 10
     n_extrap = 100
-    if input_type == "uniform_random":
-        np.random.seed(input_seed)
-        x_l = np.random.uniform(low=x_min,high=region_interp[0],size=round(n_extrap/2)) 
-        x_c = np.random.uniform(low=region_interp[0],high=region_interp[1],size=n_interp)
-        x_r = np.random.uniform(low=region_interp[1],high=x_max,size=n_extrap-round(n_extrap/2))
-    else:
-        x_l = np.linspace(start=x_min,stop=region_interp[0],num=round(n_extrap/2))
-        x_c = np.linspace(start=region_interp[0],stop=region_interp[1],num=n_interp+2)
-        x_r = np.linspace(start=region_interp[1],stop=x_max,num=n_extrap-round(n_extrap/2))
-    x = np.sort(np.unique(np.concatenate([x_l, x_c, x_r])))
+    x = generate_grid(input_type=input_type, input_seed=input_seed, x_min=x_min, x_max=x_max, region_interp=region_interp, n_interp=n_interp, n_extrap=n_extrap)
     # Fraction of points of data points in region used for training
     frac_train = 0.5
     # Create experiment class instance

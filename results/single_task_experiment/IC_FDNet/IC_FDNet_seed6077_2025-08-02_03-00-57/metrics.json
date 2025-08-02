@@ -1,0 +1,22 @@
+{
+    "desc": "step",
+    "model": "IC_FDNetwork",
+    "seed": 6077,
+    "rmse": 59349.37245758847,
+    "mean_nll": 9.964072028993138,
+    "training_time": 0.022615671157836914,
+    "timestamp": "2025-08-02T03:01:03.075460",
+    "epochs": 2,
+    "beta_param_dict": {
+        "beta_scheduler": "linear",
+        "warmup_epochs": 1,
+        "beta_max": 1.0
+    },
+    "x_min": -98.6011603193228,
+    "x_max": 99.53629813005834,
+    "region_interp": [
+        -1,
+        1
+    ],
+    "frac_train": 0.5
+}

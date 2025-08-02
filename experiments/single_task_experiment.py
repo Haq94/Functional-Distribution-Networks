@@ -7,6 +7,7 @@ from tqdm import tqdm
 
 from experiments.base_experiment import BaseExperiment
 from data.toy_functions import sample_function
+from data.toy_functions import generate_grid
 from utils.saver.single_task_saver import single_task_saver
 from utils.metrics import get_summary
 from utils.plots.single_task_plots import single_task_plots
@@ -153,16 +154,7 @@ if __name__ == "__main__":
     x_max = 100
     n_interp = 10
     n_extrap = 100
-    if input_type == "uniform_random":
-        np.random.seed(input_seed)
-        x_l = np.random.uniform(low=x_min,high=region_interp[0],size=round(n_extrap/2)) 
-        x_c = np.random.uniform(low=region_interp[0],high=region_interp[1],size=n_interp)
-        x_r = np.random.uniform(low=region_interp[1],high=x_max,size=n_extrap-round(n_extrap/2))
-    else:
-        x_l = np.linspace(start=x_min,stop=region_interp[0],num=round(n_extrap/2))
-        x_c = np.linspace(start=region_interp[0],stop=region_interp[1],num=n_interp+2)
-        x_r = np.linspace(start=region_interp[1],stop=x_max,num=n_extrap-round(n_extrap/2))
-    x = np.sort(np.unique(np.concatenate([x_l, x_c, x_r])))
+    x = generate_grid(input_type=input_type, input_seed=input_seed, x_min=x_min, x_max=x_max, region_interp=region_interp, n_interp=n_interp, n_extrap=n_extrap)
     # Fraction of points of data points in region used for training
     frac_train = 0.5
     # Create experiment class instance

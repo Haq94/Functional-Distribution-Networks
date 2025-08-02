@@ -1,7 +1,7 @@
 import os
 import numpy as np
 
-def load_all_scheduler_metrics(root_dir="results/fixed_model_beta_scheduler_experiment"):
+def load_scheduler_metrics(root_dir="results/fixed_model_beta_scheduler_experiment"):
     """
     Load all metrics.npz files from beta scheduler experiment.
     Returns:
@@ -29,3 +29,32 @@ def load_all_scheduler_metrics(root_dir="results/fixed_model_beta_scheduler_expe
                 data[seed][model_dir][param_dir] = metrics
 
     return data
+
+def get_metric(metrics_dicts, 
+               seed, 
+               model_type, 
+               beta_scheduler, 
+               beta_max, 
+               warmup_epochs, 
+               metric_name):
+    """
+    Retrieve a specific metric from the nested metrics dictionary.
+
+    Args:
+        metrics_dict (dict): Nested dictionary storing all experiment metrics.
+        seed (int)
+        model_type (str): e.g., 'IC_FDNet'
+        beta_scheduler (str): e.g., 'linear'
+        beta_max (float)
+        warmup_epochs (int)
+        metric_name (str): one of ["losses_per_epoch", "mse_per_epoch", "kls_per_epoch", "beta_per_epoch", ...]
+
+    Returns:
+        List or array corresponding to the metric, or None if not found.
+    """
+    try:
+        return metrics_dicts[seed][model_type][beta_scheduler][beta_max][warmup_epochs][metric_name]
+    except KeyError as e:
+        print(f"[Warning] Missing key in metrics_dict: {e}")
+        return None
+

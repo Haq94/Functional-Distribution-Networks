@@ -1,90 +1,262 @@
 import os
 import matplotlib.pyplot as plt
 import numpy as np
-from collections import defaultdict
 
-def plot_mse_vs_beta(data, model_type, warmup_epochs, scheduler_list=None):
+from utils.saver.general_saver import save_plot
+
+def plot_training_metrics_overlay(metrics_dicts, seeds, beta_max_arr, beta_scheduler_types, warmup_epochs_arr, 
+                                  save_dir=None, schedulers=None, beta_max=None, warmup_epochs_list=None):
+    for seed in seeds:
+        seed_dict = metrics_dicts[seed]
+        for model_type in seed_dict.keys():
+            model_dict = seed_dict[model_type]
+            
+            fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+            metric_keys = ["losses_per_epoch", "mse_per_epoch", "kls_per_epoch", "beta_per_epoch"]
+            titles = ["Loss", "MSE", "KL Divergence", "Beta Value"]
+
+            handles = []
+            labels = []
+
+            for i, (key, title) in enumerate(zip(metric_keys, titles)):
+                ax = axes[i // 2][i % 2]
+
+                for scheduler in sorted(model_dict.keys()):
+                    if schedulers and scheduler not in schedulers:
+                        continue
+                    beta_dict = model_dict[scheduler]
+
+                    for beta in sorted(beta_dict.keys()):
+                        if beta_max is not None and not np.isclose(beta, beta_max):
+                            continue
+                        warmup_dict = beta_dict[beta]
+
+                        for warmup in sorted(warmup_dict.keys()):
+                            if warmup_epochs_list and warmup not in warmup_epochs_list:
+                                continue
+
+                            run_metrics = warmup_dict[warmup]
+                            y = run_metrics.get(key, None)
+                            if y is None:
+                                continue
+                            label = f"{scheduler}, β={beta:.2f}, warmup={warmup}"
+                            line, = ax.plot(range(len(y)), y, label=label)
+                            if i == 0:  # collect legend handles once
+                                handles.append(line)
+                                labels.append(label)
+
+                ax.set_title(title)
+                ax.set_xlabel("Epoch")
+                ax.set_ylabel(title)
+                ax.grid(True)
+
+            fig.suptitle(f"{model_type} | Seed {seed}", fontsize=14)
+            fig.legend(handles, labels, loc="upper center", ncol=3, fontsize=8)
+            plt.tight_layout(rect=[0, 0, 1, 0.93])
+
+            if save_dir:
+                fname = f"{model_type}_seed{seed}_metrics_overlay"
+                save_plot(save_dir, plot_name=fname, fig=fig)
+                plt.close()
+            else:
+                plt.show()
+
+
+def plot_final_metrics_vs_x_overlay(metrics_dicts, seeds, save_dir=None,
+                                    beta_scheduler_types=None,
+                                    beta_max_arr=None,
+                                    warmup_epochs_arr=None):
     """
-    For fixed warmup_epochs, plot MSE vs beta_max for each beta scheduler.
-
-    Args:
-        data: output of `load_all_scheduler_metrics`
-        model_type: e.g., "IC_FDNet"
-        warmup_epochs: int
-        scheduler_list: optionally filter which schedulers to include
+    Plot mean, variance, bias, and mse vs x for each model and seed,
+    overlaying different beta schedules. Shared legend and interpolation region.
     """
-    mse_data = defaultdict(list)
-    beta_vals = set()
+    for seed in seeds:
+        seed_dict = metrics_dicts[seed]
+        for model_type, model_dict in seed_dict.items():
 
-    for seed, model_dict in data.items():
-        runs = model_dict.get(model_type, {})
-        for run_name, metrics in runs.items():
-            if f"warmup{warmup_epochs}" not in run_name:
-                continue
-            scheduler = run_name.split("_")[0]
-            if scheduler_list and scheduler not in scheduler_list:
-                continue
-            beta_str = [s for s in run_name.split("_") if s.startswith("beta")][0]
-            beta_val = float(beta_str.replace("beta", ""))
-            beta_vals.add(beta_val)
-            mse_data[scheduler].append((beta_val, metrics["final_mse"]))
+            metric_keys = ["final_mean", "final_variance", "final_bias", "final_mse"]
+            titles = ["$\mu$ vs $x$", "$\sigma^2$ (dB) vs $x$", "$Bias^2$ (dB) vs $x$", "$MSE$ (dB) vs $x$"]
+            ylabels = ["$\mu$", "$\sigma^2$ (dB)", "$Bias^2$ (dB)", "$MSE$ (dB)"]
 
-    beta_vals = sorted(beta_vals)
-    for scheduler, vals in mse_data.items():
-        # average across seeds
-        betas, mses = zip(*vals)
-        beta_unique = sorted(set(betas))
-        mean_mse = [np.mean([m for b, m in vals if np.isclose(b, bu)]) for bu in beta_unique]
-        plt.plot(beta_unique, mean_mse, label=scheduler)
+            fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+            handles = [[] for _ in range(4)]
+            labels = [[] for _ in range(4)]
 
-    plt.xlabel("Beta Max")
-    plt.ylabel("Final MSE")
-    plt.title(f"MSE vs Beta Max (Warmup {warmup_epochs}) - {model_type}")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
+            x_left, x_right, x_vals, y_vals = None, None, None, None
+            truth_plotted = False  # <- Track if Truth is already plotted
 
-def plot_scheduler_metric_curves(data, model_type, seed, save_path=None):
-    """
-    For a given model and seed, overlay Loss, MSE, KL, Beta vs Epoch.
-    Each line = one (scheduler, beta_max, warmup_epoch) config.
+            for scheduler in sorted(model_dict.keys()):
+                if beta_scheduler_types and scheduler not in beta_scheduler_types:
+                    continue
+                beta_dict = model_dict[scheduler]
 
-    Args:
-        data (dict): Loaded metrics dictionary from loader.
-        model_type (str)
-        seed (int)
-        save_path (str or None): Optional path to save plot.
-    """
-    metrics_keys = ["losses_per_epoch", "mse_per_epoch", "kls_per_epoch", "beta_per_epoch"]
-    metric_names = ["Loss", "MSE", "KL Divergence", "Beta"]
-    
-    fig, axes = plt.subplots(1, 4, figsize=(22, 5), sharex=True)
-    fig.suptitle(f"{model_type} (Seed {seed}) – Metrics vs Epoch", fontsize=16)
+                for beta in sorted(beta_dict.keys()):
+                    if beta_max_arr is not None and not any(np.isclose(beta, b) for b in beta_max_arr):
+                        continue
+                    warmup_dict = beta_dict[beta]
 
-    runs = data[seed][model_type]
+                    for warmup in sorted(warmup_dict.keys()):
+                        if warmup_epochs_arr and warmup not in warmup_epochs_arr:
+                            continue
 
-    for run_name, run_data in runs.items():
-        label = f"{run_data['beta_scheduler']}, β={run_data['beta_max']}, w={run_data['warmup_epochs']}"
-        epochs = run_data["epoch"]
+                        run_metrics = warmup_dict[warmup]
+                        x_vals = np.array(run_metrics["x_values"])
+                        y_vals = run_metrics.get("y_values", None)
+                        interp_region = run_metrics.get("interp_region", None)
 
-        for idx, (key, title) in enumerate(zip(metrics_keys, metric_names)):
-            y = run_data.get(key)
-            if y is not None:
-                axes[idx].plot(epochs, y, label=label, alpha=0.8)
+                        if interp_region:
+                            x_left, x_right = interp_region[0], interp_region[1]
 
-    # Axis formatting
-    for ax, title in zip(axes, metric_names):
-        ax.set_title(title)
-        ax.set_xlabel("Epoch")
-        ax.grid(True)
+                        label = f"{scheduler}, β={beta:.2f}, warmup={warmup}"
 
-    axes[0].set_ylabel("Value")
-    fig.legend(*axes[0].get_legend_handles_labels(), loc="upper center", ncol=4, title="Config")
-    fig.tight_layout(rect=[0, 0, 1, 0.92])
+                        for i, key in enumerate(metric_keys):
+                            raw_y = np.array(run_metrics.get(key))
 
-    if save_path:
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        fig.savefig(save_path, dpi=300)
+                            if key in {"final_variance", "final_mse"}:
+                                y = 10 * np.log10(np.maximum(raw_y, 1e-12))
+                            elif key == "final_bias":
+                                y = 20 * np.log10(np.maximum(np.abs(raw_y), 1e-12))
+                            else:
+                                y = raw_y
 
-    plt.show()
+                            ax = axes[i // 2][i % 2]
+                            line, = ax.plot(x_vals, y, label=label)
+                            handles[i].append(line)
+                            labels[i].append(label)
+
+                        # Plot truth on mean subplot only once
+                        if not truth_plotted and y_vals is not None:
+                            ax_mu = axes[0][0]
+                            truth_line, = ax_mu.plot(x_vals, y_vals, color="black", linestyle="--", label="Truth")
+                            handles[0].append(truth_line)
+                            labels[0].append("Truth")
+                            truth_plotted = True
+
+            for i, (ax, title, ylabel) in enumerate(zip(axes.flat, titles, ylabels)):
+                ax.set_title(title)
+                ax.set_xlabel("x")
+                ax.set_ylabel(ylabel)
+                ax.grid(True)
+
+                if x_left is not None and x_right is not None:
+                    ax.axvspan(x_left, x_right, color='lightcoral', alpha=0.3, label="Interpolation Region")
+                    ax.axvline(x_left, color='red', linestyle='--')
+                    ax.axvline(x_right, color='red', linestyle='--')
+
+            # Global legend (only from mean subplot)
+            fig.legend(handles[0], labels[0], loc="upper center", ncol=3, fontsize=8)
+            fig.suptitle(f"{model_type} | Seed {seed} — Final Metrics vs $x$", fontsize=14)
+            plt.tight_layout(rect=[0, 0, 1, 0.93])
+
+            if save_dir:
+                fname = f"{model_type}_seed{seed}_final_metrics_vs_x"
+                save_plot(save_dir, plot_name=fname, fig=fig)
+                plt.close()
+            else:
+                plt.show()
+
+
+
+
+
+
+# def plot_final_metrics_vs_x_overlay(metrics_dicts, seeds, save_dir=None,
+#                                     beta_scheduler_types=None,
+#                                     beta_max_arr=None,
+#                                     warmup_epochs_arr=None):
+#     """
+#     Plot mean, variance, bias, and mse vs x for each model and seed,
+#     overlaying different beta schedules.
+#     """
+#     for seed in seeds:
+#         seed_dict = metrics_dicts[seed]
+#         for model_type, model_dict in seed_dict.items():
+
+#             metric_keys = ["final_mean", "final_variance", "final_bias", "final_mse"]
+#             titles = ["$\mu$ vs $x$", "$\sigma^2$ (dB) vs $x$", "$Bias^2$ (dB) vs $x$", "$MSE$ (dB) vs $x$"]
+#             ylabels = ["$\mu$", "$\sigma^2$ (dB)", "$Bias^2$ (dB)", "$MSE$ (dB)"]
+
+#             fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+#             handles = [[] for _ in range(4)]
+#             labels = [[] for _ in range(4)]
+
+#             for scheduler in sorted(model_dict.keys()):
+#                 if beta_scheduler_types and scheduler not in beta_scheduler_types:
+#                     continue
+#                 beta_dict = model_dict[scheduler]
+
+#                 for beta in sorted(beta_dict.keys()):
+#                     if beta_max_arr is not None and not any(np.isclose(beta, b) for b in beta_max_arr):
+#                         continue
+#                     warmup_dict = beta_dict[beta]
+
+#                     for warmup in sorted(warmup_dict.keys()):
+#                         if warmup_epochs_arr and warmup not in warmup_epochs_arr:
+#                             continue
+
+#                         run_metrics = warmup_dict[warmup]
+#                         interp_region = run_metrics['interp_region']
+#                         x_left = interp_region[0]
+#                         x_right = interp_region[1]
+#                         y_vals = run_metrics['y_values']
+#                         x_vals = np.array(run_metrics["x_values"])
+#                         label = f"{scheduler}, β={beta:.2f}, warmup={warmup}"
+
+#                         for i, key in enumerate(metric_keys):
+#                             raw_y = np.array(run_metrics[key])
+
+#                             if key == "final_variance" or key == "final_mse":
+#                                 y = 10 * np.log10(np.maximum(raw_y, 1e-12))  # dB scale
+#                             elif key == "final_bias":
+#                                 y = 20 * np.log10(np.maximum(np.abs(raw_y), 1e-12))  # dB scale
+#                             else:
+#                                 y = raw_y
+
+#                             ax = axes[i // 2][i % 2]
+#                             line, = ax.plot(x_vals, y, label=label)
+#                             handles[i].append(line)
+#                             labels[i].append(label)
+
+#                             line_truth, = ax.plot(x_vals, y_vals, label='Truth')
+#                             handles[i].append(line_truth)
+#                             labels[i].append('Truth')
+
+#             for i, (ax, title, ylabel) in enumerate(zip(axes.flat, titles, ylabels)):
+#                 if x_vals is not None:
+#                     ax.axvspan(x_left, x_right, color='lightcoral', alpha=0.3, label="Interpolation Region")
+#                     ax.axvline(x_left, color='red', linestyle='--')
+#                     ax.axvline(x_right, color='red', linestyle='--')
+
+#                 if i == 0 and x_vals is not None and y_vals is not None:
+#                     line_truth, = ax.plot(x_vals, y_vals, color="black", linestyle="--", label="Truth")
+#                     handles[i].append(line_truth)
+#                     labels[i].append("Truth")
+
+#                 ax.set_title(title)
+#                 ax.set_xlabel("x")
+#                 ax.set_ylabel(ylabel)
+#                 ax.grid(True)
+#                 if handles[i]:
+#                     ax.legend(handles[i], labels[i], fontsize=7)
+
+
+#             fig.suptitle(f"{model_type} | Seed {seed} — Final Metrics vs $x$", fontsize=14)
+#             plt.tight_layout(rect=[0, 0, 1, 0.95])
+
+#             if save_dir:
+#                 fname = f"{model_type}_seed{seed}_final_metrics_vs_x"
+#                 save_plot(save_dir, plot_name=fname, fig=fig)
+#                 plt.close()
+#             else:
+#                 plt.show()
+
+
+
+
+
+
+
+
+
+
 

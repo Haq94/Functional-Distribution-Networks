@@ -52,6 +52,17 @@ def generate_meta_task(n_context=10, n_target=10,
     # return x_context.squeeze(), y_context.squeeze(), x_target.squeeze(), y_target.squeeze(), desc
     return x_context, y_context, x_target, y_target, desc
 
+def generate_grid(input_type=None, input_seed=0, x_min=-10, x_max=10, region_interp=(-1,1), n_interp=10, n_extrap=100):
+    if input_type == "uniform_random":
+        np.random.seed(input_seed)
+        x_l = np.random.uniform(low=x_min,high=region_interp[0],size=round(n_extrap/2)) 
+        x_c = np.random.uniform(low=region_interp[0],high=region_interp[1],size=n_interp)
+        x_r = np.random.uniform(low=region_interp[1],high=x_max,size=n_extrap-round(n_extrap/2))
+    else:
+        x_l = np.linspace(start=x_min,stop=region_interp[0],num=round(n_extrap/2))
+        x_c = np.linspace(start=region_interp[0],stop=region_interp[1],num=n_interp+2)
+        x_r = np.linspace(start=region_interp[1],stop=x_max,num=n_extrap-round(n_extrap/2))
+    return np.sort(np.unique(np.concatenate([x_l, x_c, x_r])))
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
