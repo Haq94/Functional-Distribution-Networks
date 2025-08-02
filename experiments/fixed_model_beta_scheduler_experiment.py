@@ -7,7 +7,8 @@ from tqdm import tqdm
 
 from experiments.base_experiment import BaseExperiment
 from data.toy_functions import sample_function
-
+from utils.loader.fixed_model_beta_scheduler_loader import load_all_scheduler_metrics
+from utils.plots.fixed_model_beta_scheduler_plots import plot_mse_vs_beta
 
 class FixedModelBetaSchedulerExperiment:
     def __init__(self, model_type=None, seeds=None, hidden_dim=32, hyper_hidden_dim=64):
@@ -58,8 +59,10 @@ class FixedModelBetaSchedulerExperiment:
             y_test = torch.tensor(f(x_test), dtype=torch.float64)
             y_train = torch.tensor(f(x_train), dtype=torch.float64)
 
+            # Store training, testing, and metadata
             data = (x_train, y_train, x_test, y_test, desc)
             
+            # Generate metrics and save
             for model_type in model_types:
                 for beta_scheduler in beta_scheduler_types:
                     for beta_max in beta_max_arr:
@@ -68,11 +71,8 @@ class FixedModelBetaSchedulerExperiment:
                             beta_param_dict = {"beta_scheduler": beta_scheduler,
                                             "warmup_epochs": warmup_epochs, "beta_max": beta_max}
 
-                            # Run name
-                            run_name = f"{model_type}_seed{seed}_{beta_scheduler}_{warmup_epochs}_{beta_max}_{date_time}"
-
-                            # Pre-allocate save dir
-                            save_dir = None
+                            # Save dir
+                            save_dir = self.format_run_path(seed, model_type, beta_scheduler, beta_max, warmup_epochs)
 
                             # Base experiment instance
                             exp_inst = BaseExperiment(model_type=model_type, 
@@ -113,11 +113,24 @@ class FixedModelBetaSchedulerExperiment:
                                 }
 
                                 if save_switch:
-                                    # Save dir
-                                    save_dir = os.path.join("results", "fixed_model_beta_scheduler_experiment", model_type, f"{run_name}")
+                                    # Save metrics
                                     os.makedirs(save_dir, exist_ok=True)
                                     np.savez(os.path.join(save_dir, "metrics.npz"), **metrics_dict)
+        
+        # Run analysis
+        self.run_analysis()
 
+    def run_analysis(self):
+        # Parameters+
+        
+        model_types = self.model_types
+        seeds = self.seeds
+        # Load metrics
+        data = load_all_scheduler_metrics()
+        # Only keep data with the correct seed and model type
+        data = data[seeds]
+        # Perform Loss, MSE, KL, and Beta plots per model
+        plot_mse_vs_beta(data, model_type="IC_FDNet", warmup_epochs=50)
 
     def get_capabilities(self, model_type):
         capabilities = {"mean", "bias"}  # always
@@ -125,8 +138,10 @@ class FixedModelBetaSchedulerExperiment:
             capabilities |= {"residuals", "variance", "nll"}
         return capabilities
     
-    def get_beta_scheduler_dict(self):
-        pass
+    def format_run_path(self, seed, model_type, beta_scheduler, beta_max, warmup_epochs):
+        param_str = f"{beta_scheduler}_beta{beta_max:.3f}_warmup{int(warmup_epochs)}"
+        return os.path.join("results", "fixed_model_beta_scheduler_experiment", f"seed_{seed}", model_type, param_str)
+
 
 if __name__ == "__main__":
     # Model type
@@ -142,9 +157,9 @@ if __name__ == "__main__":
     # Beta scheduler types
     beta_scheduler_types = ["linear", "cosine", "sigmoid", "constant"]
     # Beta max array
-    beta_max_arr = np.linspace(start=0.1, stop=1, num=10)
+    beta_max_arr = np.linspace(start=0.1, stop=1, num=1)
     # Warmup epochs array
-    warmup_epochs_arr = np.unique(np.round(np.array([0.05, 0.1, 0.5, 0.9])*epochs))
+    warmup_epochs_arr = np.unique(np.round(np.array([0.5])*epochs))
     # Perform analysis 
     analysis = True
     # Save switch
