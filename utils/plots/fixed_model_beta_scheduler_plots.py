@@ -4,8 +4,12 @@ import numpy as np
 
 from utils.saver.general_saver import save_plot
 
-def plot_training_metrics_overlay(metrics_dicts, seeds, beta_max_arr, beta_scheduler_types, warmup_epochs_arr, 
-                                  save_dir=None, schedulers=None, beta_max=None, warmup_epochs_list=None):
+def plot_training_metrics_overlay(metrics_dicts, seeds=None, 
+                                  beta_scheduler_types=None, 
+                                  beta_max_arr=None, 
+                                  warmup_epochs_arr=None, 
+                                  save_dir=None):
+    seeds = list(metrics_dicts.keys()) if seeds is None else seeds
     for seed in seeds:
         seed_dict = metrics_dicts[seed]
         for model_type in seed_dict.keys():
@@ -13,7 +17,7 @@ def plot_training_metrics_overlay(metrics_dicts, seeds, beta_max_arr, beta_sched
             
             fig, axes = plt.subplots(2, 2, figsize=(12, 8))
             metric_keys = ["losses_per_epoch", "mse_per_epoch", "kls_per_epoch", "beta_per_epoch"]
-            titles = ["Loss", "MSE", "KL Divergence", "Beta Value"]
+            titles = ["Loss", "MSE", "KL Divergence", "$\\beta$"]
 
             handles = []
             labels = []
@@ -21,25 +25,25 @@ def plot_training_metrics_overlay(metrics_dicts, seeds, beta_max_arr, beta_sched
             for i, (key, title) in enumerate(zip(metric_keys, titles)):
                 ax = axes[i // 2][i % 2]
 
-                for scheduler in sorted(model_dict.keys()):
-                    if schedulers and scheduler not in schedulers:
+                for beta_scheduler in sorted(model_dict.keys()):
+                    if beta_scheduler_types and beta_scheduler not in beta_scheduler_types:
                         continue
-                    beta_dict = model_dict[scheduler]
+                    beta_dict = model_dict[beta_scheduler]
 
                     for beta in sorted(beta_dict.keys()):
-                        if beta_max is not None and not np.isclose(beta, beta_max):
+                        if beta_max_arr is not None and not np.isclose(beta, beta_max_arr):
                             continue
                         warmup_dict = beta_dict[beta]
 
                         for warmup in sorted(warmup_dict.keys()):
-                            if warmup_epochs_list and warmup not in warmup_epochs_list:
+                            if warmup_epochs_arr and warmup not in warmup_epochs_arr:
                                 continue
 
                             run_metrics = warmup_dict[warmup]
                             y = run_metrics.get(key, None)
                             if y is None:
                                 continue
-                            label = f"{scheduler}, β={beta:.2f}, warmup={warmup}"
+                            label = f"{beta_scheduler}, β={beta:.2f}, warmup={warmup}"
                             line, = ax.plot(range(len(y)), y, label=label)
                             if i == 0:  # collect legend handles once
                                 handles.append(line)
@@ -50,26 +54,28 @@ def plot_training_metrics_overlay(metrics_dicts, seeds, beta_max_arr, beta_sched
                 ax.set_ylabel(title)
                 ax.grid(True)
 
-            fig.suptitle(f"{model_type} | Seed {seed}", fontsize=14)
+            # fig.suptitle(f"{model_type} | Seed {seed}", fontsize=14)
             fig.legend(handles, labels, loc="upper center", ncol=3, fontsize=8)
             plt.tight_layout(rect=[0, 0, 1, 0.93])
 
             if save_dir:
                 fname = f"{model_type}_seed{seed}_metrics_overlay"
-                save_plot(save_dir, plot_name=fname, fig=fig)
+                save_plot(os.path.join(save_dir,f"seed{seed}", model_type), plot_name=fname, fig=fig)
                 plt.close()
             else:
                 plt.show()
 
 
-def plot_final_metrics_vs_x_overlay(metrics_dicts, seeds, save_dir=None,
+def plot_final_metrics_vs_x_overlay(metrics_dicts, seeds=None,
                                     beta_scheduler_types=None,
                                     beta_max_arr=None,
-                                    warmup_epochs_arr=None):
+                                    warmup_epochs_arr=None,
+                                    save_dir=None):
     """
     Plot mean, variance, bias, and mse vs x for each model and seed,
     overlaying different beta schedules. Shared legend and interpolation region.
     """
+    seeds = list(metrics_dicts.keys()) if seeds is None else seeds
     for seed in seeds:
         seed_dict = metrics_dicts[seed]
         for model_type, model_dict in seed_dict.items():
@@ -85,10 +91,10 @@ def plot_final_metrics_vs_x_overlay(metrics_dicts, seeds, save_dir=None,
             x_left, x_right, x_vals, y_vals = None, None, None, None
             truth_plotted = False  # <- Track if Truth is already plotted
 
-            for scheduler in sorted(model_dict.keys()):
-                if beta_scheduler_types and scheduler not in beta_scheduler_types:
+            for beta_scheduler in sorted(model_dict.keys()):
+                if beta_scheduler_types and beta_scheduler not in beta_scheduler_types:
                     continue
-                beta_dict = model_dict[scheduler]
+                beta_dict = model_dict[beta_scheduler]
 
                 for beta in sorted(beta_dict.keys()):
                     if beta_max_arr is not None and not any(np.isclose(beta, b) for b in beta_max_arr):
@@ -107,7 +113,7 @@ def plot_final_metrics_vs_x_overlay(metrics_dicts, seeds, save_dir=None,
                         if interp_region:
                             x_left, x_right = interp_region[0], interp_region[1]
 
-                        label = f"{scheduler}, β={beta:.2f}, warmup={warmup}"
+                        label = f"{beta_scheduler}, β={beta:.2f}, warmup={warmup}"
 
                         for i, key in enumerate(metric_keys):
                             raw_y = np.array(run_metrics.get(key))
@@ -145,12 +151,12 @@ def plot_final_metrics_vs_x_overlay(metrics_dicts, seeds, save_dir=None,
 
             # Global legend (only from mean subplot)
             fig.legend(handles[0], labels[0], loc="upper center", ncol=3, fontsize=8)
-            fig.suptitle(f"{model_type} | Seed {seed} — Final Metrics vs $x$", fontsize=14)
+            # fig.suptitle(f"{model_type} | Seed {seed} — Final Metrics vs $x$", fontsize=14)
             plt.tight_layout(rect=[0, 0, 1, 0.93])
 
             if save_dir:
                 fname = f"{model_type}_seed{seed}_final_metrics_vs_x"
-                save_plot(save_dir, plot_name=fname, fig=fig)
+                save_plot(os.path.join(save_dir,f"seed{seed}", model_type), plot_name=fname, fig=fig)
                 plt.close()
             else:
                 plt.show()

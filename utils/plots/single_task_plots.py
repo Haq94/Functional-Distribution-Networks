@@ -1,3 +1,4 @@
+import os
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -422,3 +423,128 @@ def overlay_plot_metrics(metric_dicts, x, metric_name="mse", title=None, save_pa
         plt.show()
 
     plt.close()
+
+
+# ================================================================================================================
+
+
+def plot_single_task_overlay(
+    seed_date_time_list,
+    model_types,
+    x_train,
+    y_train,
+    x_test,
+    y_test,
+    metrics,
+    losses,
+    stoch_models,
+    stoch_metrics,
+    model_colors,
+    save_dir=None,
+    show_figs=True,
+    use_db_scale=True
+):
+    for seed_date_time in seed_date_time_list:
+        x = x_test[seed_date_time]
+        y = y_test[seed_date_time]
+        x_min = np.min(x_train[seed_date_time])
+        x_max = np.max(x_train[seed_date_time])
+
+        # --- Metric Plots ---
+        for metric_label in {"mean", "var", "std", "bias", "mse", "nll"}:
+            stoch = metric_label in stoch_metrics
+            models = sorted(stoch_models.intersection(model_types)) if stoch else sorted(model_types)
+
+            fig, ax = plt.subplots(figsize=(10, 8))
+            metric_min, metric_max = None, None
+
+            for model in models:
+                metric = metrics[metric_label][seed_date_time][model]
+                if metric_label in {"var", "std", "mse"} and use_db_scale:
+                    metric = 10 * np.log10(np.maximum(metric, 1e-10))
+                    plot_label = "$\sigma^{2}$ (dB)" if metric_label == "var" else "$\sigma$ (dB)" if metric_label == "std" else "$MSE$ (dB)"
+                else:
+                    plot_label = "$\mu$" if metric_label == "mean" else "$Bias$" if metric_label == "bias" else metric_label
+
+                ax.plot(x, metric, label=model, color=model_colors.get(model, None))
+                metric_min = np.min(metric) if metric_min is None else min(metric_min, np.min(metric))
+                metric_max = np.max(metric) if metric_max is None else max(metric_max, np.max(metric))
+
+            if metric_label == "mean":
+                metric_min = min(metric_min, np.min(y))
+                metric_max = max(metric_max, np.max(y))
+                ax.plot(x, y, label="Truth", linestyle='--', color='black')
+
+            ax.axvline(x=x_min, color='red', linestyle='--', label='Train Region')
+            ax.axvline(x=x_max, color='red', linestyle='--')
+            ax.set_ylim([metric_min, metric_max])
+            ax.set_xlabel("x")
+            ax.set_ylabel(plot_label)
+            ax.grid(True)
+            ax.legend()
+            fig.tight_layout()
+            if save_dir:
+                fig.savefig(os.path.join(save_dir, f"{metric_label}_vs_x_seed{seed_date_time[0]}.png"))
+            if show_figs:
+                plt.show()
+            plt.close(fig)
+
+        # --- Loss Plots ---
+        for label in losses:
+            fig, ax = plt.subplots(figsize=(10, 8))
+            value_max = None
+
+            for model in model_types:
+                if model not in stoch_models and label in {"kls", "losses", "betas"}:
+                    continue
+
+                value = losses[label][seed_date_time][model]
+                ax.plot(np.arange(1, len(value)+1), value, label=model, color=model_colors.get(model, None))
+                value_max = np.max(value) if value_max is None else max(value_max, np.max(value))
+
+            label_map = {"mses": "$MSE$", "losses": "$Losses$", "kls": "$KLS$", "betas": r"$\beta$"}
+            ax.set_ylim([0, value_max])
+            ax.set_xlabel("Epochs")
+            ax.set_ylabel(label_map.get(label, label))
+            ax.grid(True)
+            ax.legend()
+            fig.tight_layout()
+            if save_dir:
+                fig.savefig(os.path.join(save_dir, f"{label}_vs_epoch_seed{seed_date_time[0]}.png"))
+            if show_figs:
+                plt.show()
+            plt.close(fig)
+
+        # --- Scatter Plots ---
+        def scatter_plot(x, y, xlabel, ylabel, title, fname):
+            fig = plt.figure(figsize=(10, 8))
+            for model in sorted(stoch_models.intersection(model_types)):
+                plt.scatter(x[model], y[model], s=10, alpha=0.7, label=model)
+            plt.xlabel(xlabel)
+            plt.ylabel(ylabel)
+            plt.title(title)
+            plt.grid(True)
+            plt.legend()
+            plt.tight_layout()
+            if save_dir:
+                fig.savefig(os.path.join(save_dir, fname))
+            if show_figs:
+                plt.show()
+            plt.close(fig)
+
+        # Collect data for scatter plots
+        var = {m: metrics["var"][seed_date_time][m] for m in stoch_models.intersection(model_types)}
+        mse = {m: metrics["mse"][seed_date_time][m] for m in stoch_models.intersection(model_types)}
+        bias = {m: metrics["bias"][seed_date_time][m] for m in stoch_models.intersection(model_types)}
+        if use_db_scale:
+            var_db = {m: 10 * np.log10(np.maximum(v, 1e-10)) for m, v in var.items()}
+            mse_db = {m: 10 * np.log10(np.maximum(mv, 1e-10)) for m, mv in mse.items()}
+            bias_db = {m: 10 * np.log10(np.maximum(b**2, 1e-10)) for m, b in bias.items()}
+
+            scatter_plot(var_db, mse_db, r"$\sigma_{\hat{y}}^2$ (dB)", "MSE (dB)", "MSE vs Variance (dB)", f"mse_vs_var_db_seed{seed_date_time[0]}.png")
+            scatter_plot(bias_db, mse_db, r"$Bias^2$ (dB)", "MSE (dB)", "MSE vs Bias (dB)", f"mse_vs_bias_db_seed{seed_date_time[0]}.png")
+            scatter_plot(var_db, bias_db, r"$\sigma_{\hat{y}}^2$ (dB)", "Bias (dB)", "Bias vs Variance (dB)", f"bias_vs_var_db_seed{seed_date_time[0]}.png")
+        else:
+            scatter_plot(var, mse, r"$\sigma_{\hat{y}}^2$", "MSE", "MSE vs Variance", f"mse_vs_var_seed{seed_date_time[0]}.png")
+            scatter_plot(bias, mse, r"$Bias$", "MSE", "MSE vs Bias", f"mse_vs_bias_seed{seed_date_time[0]}.png")
+            scatter_plot(var, bias, r"$\sigma_{\hat{y}}^2$", "Bias", "Bias vs Variance", f"bias_vs_var_seed{seed_date_time[0]}.png")

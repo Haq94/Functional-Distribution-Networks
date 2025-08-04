@@ -10,7 +10,8 @@ from data.toy_functions import sample_function
 from data.toy_functions import generate_grid
 from utils.saver.single_task_saver import single_task_saver
 from utils.metrics import get_summary
-from utils.plots.single_task_plots import single_task_plots
+from utils.plots.single_task_plots import single_task_plots, plot_single_task_overlay
+from utils.loader.single_task_loader import single_task_overlay_loader
 
 class SingleTaskExperiment:
     def __init__(self, model_type=None, seeds=None, hidden_dim=32, hyper_hidden_dim=64):
@@ -52,8 +53,8 @@ class SingleTaskExperiment:
                 torch.manual_seed(seed)
                 np.random.seed(seed)
 
-                # Run name
-                run_name = f"{model_type}_seed{seed}_{date_time}"
+                # # Run name
+                # run_name = f"{model_type}_seed{seed}_{date_time}"
 
                 # Pre-allocate save dir
                 save_dir = None
@@ -91,8 +92,8 @@ class SingleTaskExperiment:
                 if analysis:    
                     if save_switch:
                         # Create save dir
-                        save_dir = os.path.join("results", 'single_task_experiment', model_type, run_name)
-                        
+                        # save_dir = os.path.join("results", 'single_task_experiment', model_type, run_name)
+                        save_dir = os.path.join("results", 'single_task_experiment', date_time.replace('-','_'), f"seed{seed}", model_type)
                         # Generate summary
                         summary = get_summary(metric_outputs, y_test, trainer.model, desc, seed, training_time, epochs, beta_param_dict, x, region_interp, frac_train)
 
@@ -106,6 +107,47 @@ class SingleTaskExperiment:
                     single_task_plots(trainer, preds, x_train, y_train, x_test, y_test, name, ind_train, region_interp, metric_outputs=metric_outputs, block=False, save_dir=plot_save_dir, capabilities=capabilities)
                     
             print(f"Completed: {model_type} | seed: {seed} | training time: {training_time}s")
+
+        if analysis:
+            # Model colors for overlay plots
+            model_colors = {
+                'IC_FDNet': '#1f77b4',         # Blue
+                'LP_FDNet': '#ff7f0e',         # Orange
+                'BayesNet': '#2ca02c',         # Green
+                'GaussHyperNet': '#d62728',    # Red
+                'DeepEnsembleNet': '#9467bd',  # Purple
+                'HyperNet': '#8c564b',         # Brown
+                'MLPNet': '#e377c2',           # Pink
+            }
+            # Stochastic Models
+            stoch_models = {"IC_FDNet", "LP_FDNet", "BayesNet", "GaussHyperNet", "DeepEnsembleNet"}
+            # Deterministic Models
+            det_models = {"HyperNet", "MLPNet"}
+            # Stochastic Metrics
+            stoch_metrics = {"var", "nll", "std"}
+            # Re-load data
+            loaders, metrics, losses, summary, x_train, y_train, x_test, y_test, seed_date_time_list = single_task_overlay_loader(seeds, date_time)
+            for seed, date_time in seed_date_time_list:
+                # Save dir
+                save_dir = os.path.join("results", 'single_task_experiment', date_time.replace('-','_'), f"seed{seed}", 'overlay_plots')
+                # Plot and save overlay plots
+                plot_single_task_overlay(
+                    seed_date_time_list=[(seed, date_time)],
+                    model_types=model_types,
+                    x_train=x_train,
+                    y_train=y_train,
+                    x_test=x_test,
+                    y_test=y_test,
+                    metrics=metrics,
+                    losses=losses,
+                    stoch_models=stoch_models,
+                    stoch_metrics=stoch_metrics,
+                    model_colors=model_colors,
+                    save_dir=save_dir,
+                    show_figs=False,
+                    use_db_scale=True
+                    )
+
 
     def get_capabilities(self, model_type):
         capabilities = {"mean", "bias"}  # always

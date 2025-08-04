@@ -1,0 +1,22 @@
+{
+    "desc": "step",
+    "model": "LP_FDNetwork",
+    "seed": 6242,
+    "rmse": 4201243.0352935465,
+    "mean_nll": 12.549219663104644,
+    "training_time": 0.011674642562866211,
+    "timestamp": "2025-08-04T00:49:38.232810",
+    "epochs": 2,
+    "beta_param_dict": {
+        "beta_scheduler": "linear",
+        "warmup_epochs": 1,
+        "beta_max": 1.0
+    },
+    "x_min": -99.60736729775014,
+    "x_max": 98.06636327586166,
+    "region_interp": [
+        -1,
+        1
+    ],
+    "frac_train": 0.5
+}

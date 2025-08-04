@@ -2,7 +2,7 @@ import os
 import json
 import numpy as np
 
-from utils.general import get_latest_run_dir, extract_seed_from_dir, extract_timestamp_from_dir
+from utils.general import get_latest_run_dir, extract_seed_from_dir, extract_timestamp_from_dir, get_all_experiment_runs, get_seed_time_pairs_for_models
 
 class SingleTaskExperimentLoader:
     def __init__(self, model_type, seed, date_time, base_dir="results//single_task_experiment"):
@@ -79,6 +79,80 @@ class SingleTaskExperimentLoader:
             return SingleTaskExperimentLoader(model_type, seed, date_time, base_dir)
         else:
             return None
+
+def single_task_overlay_loader(seeds, date_time):
+    # Models and metadata
+    model_types = ['LP_FDNet', 'HyperNet', 'IC_FDNet', 'BayesNet', 'GaussHyperNet', 'MLPNet', 'DeepEnsembleNet']
+    # Check and make sure the seed/ date-time pair is in the list
+    runs_list = get_all_experiment_runs(base_dir="results//single_task_experiment")
+    seed_date_time_list = get_seed_time_pairs_for_models(runs=runs_list, model_type_list=model_types)
+    seed_date_time_list = [(seed, date_time) for seed, date_time in seed_date_time_list if seed in seeds and date_time in date_time]
+
+    # Pre-allocate dictionaries
+    loaders = {}
+    x_train, y_train, x_test, y_test = {}, {}, {}, {}
+
+    # Metrics: metrics[metric_name][(seed, date_time)][model]
+    metrics = {
+        "mean": {}, "var": {}, "std": {}, "res_precision": {}, "res_accuracy": {},
+        "bias": {}, "mse": {}, "bias_var_diff": {}, "nll": {}
+    }
+
+    # Losses: losses[loss_type][(seed, date_time)][model]
+    losses = {
+        "losses": {}, "mses": {}, "kls": {}, "betas": {}
+    }
+
+    # Summary: summary[summary_name][(seed, date_time)][model]
+    summary = {
+    'desc': {}, 'model': {}, 'seed': {}, 'rmse': {}, 'mean_nll': {}, 'training_time': {}, 'timestamp': {},
+    'epochs': {}, 'beta_param_dict': {}, 'x_min': {}, 'x_max': {}, 'region_interp': {}, 'frac_train': {}
+    }
+
+    for seed, date_time in seed_date_time_list:
+        for model in model_types:
+            run_tag = f"{model}_seed{seed}_{date_time}"
+            try:
+                # Initialize loader
+                loader = SingleTaskExperimentLoader(model, seed, date_time)
+
+                # Load and store metrics
+                metric_dict = loader.load_metrics()
+                for k in metrics:
+                    metrics[k].setdefault((seed, date_time), {})[model] = metric_dict[k]
+
+                # Load and store losses
+                loss_dict = loader.load_loss_curve()
+                for k in losses:
+                    losses[k].setdefault((seed, date_time), {})[model] = loss_dict[k]
+
+                # Load summary
+                summary_dict = loader.load_summary()
+                for k in summary:
+                    summary[k].setdefault((seed, date_time), {})[model] = summary_dict[k]
+
+                # Store loader
+                loaders.setdefault((seed, date_time), {})[model] = loader
+
+            except FileNotFoundError:
+                print(f"Skipping missing result: {run_tag}")
+            finally:
+                print(f"Checked: {run_tag}")
+
+        # Load data (only once per (seed, date_time))
+        try:
+            data = loader.load_data()
+            x_train[(seed, date_time)] = data["x_train"]
+            y_train[(seed, date_time)] = data["y_train"]
+            x_test[(seed, date_time)] = data["x_test"]
+            y_test[(seed, date_time)] = data["y_test"]
+        except Exception as e:
+            print(f"Failed to load data for {seed}_{date_time}: {e}")
+
+    print("Loaded runs:", list(loaders.keys()))
+
+    return loaders, metrics, losses, summary, x_train, y_train, x_test, y_test, seed_date_time_list
+
 
 if __name__ == '__main__':
     # Imports

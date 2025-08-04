@@ -1,0 +1,22 @@
+{
+    "desc": "step",
+    "model": "GaussianHyperNetwork",
+    "seed": 6242,
+    "rmse": 60.3564698354357,
+    "mean_nll": 5.998125692680549,
+    "training_time": 0.034465789794921875,
+    "timestamp": "2025-08-04T00:51:29.916238",
+    "epochs": 2,
+    "beta_param_dict": {
+        "beta_scheduler": "linear",
+        "warmup_epochs": 1,
+        "beta_max": 1.0
+    },
+    "x_min": -99.60736729775014,
+    "x_max": 98.06636327586166,
+    "region_interp": [
+        -1,
+        1
+    ],
+    "frac_train": 0.5
+}

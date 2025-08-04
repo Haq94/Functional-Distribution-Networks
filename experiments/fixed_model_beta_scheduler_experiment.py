@@ -123,7 +123,10 @@ class FixedModelBetaSchedulerExperiment:
                                     "interp_region": region_interp,
                                     "frac_train": frac_train,
                                     "MC": MC,
-                                    "num_samples": num_samples
+                                    "num_samples": num_samples,
+                                    "desc": desc,
+                                    "x_train": x_train,
+                                    "y_train": y_train
                                 }
                                 # Store data
                                 metrics_dicts[seed][model_type][beta_scheduler][beta_max][warmup_epochs] = metrics_dict
@@ -136,16 +139,10 @@ class FixedModelBetaSchedulerExperiment:
             np.savez_compressed(os.path.join(save_dir, "metrics_dict.npz"), metrics_dicts=metrics_dicts)
 
         if run_analysis:
-            plot_final_metrics_vs_x_overlay(metrics_dicts, seeds, save_dir=save_dir, beta_scheduler_types=beta_scheduler_types, beta_max_arr=beta_max_arr, warmup_epochs_arr=warmup_epochs_arr)
+            # Plot metrics vs x
+            plot_final_metrics_vs_x_overlay(metrics_dicts=metrics_dicts, seeds=seeds, beta_scheduler_types=beta_scheduler_types, beta_max_arr=beta_max_arr, warmup_epochs_arr=warmup_epochs_arr, save_dir=os.path.join(save_dir,'plots'))
             # Plot training metrics
-            plot_training_metrics_overlay(
-                metrics_dicts=metrics_dicts,
-                seeds=seeds,
-                beta_max_arr=beta_max_arr,
-                beta_scheduler_types=beta_scheduler_types,
-                warmup_epochs_arr=warmup_epochs_arr,
-                save_dir=os.path.join(save_dir,'plots')
-            )
+            plot_training_metrics_overlay(metrics_dicts=metrics_dicts, seeds=seeds, beta_scheduler_types=beta_scheduler_types, beta_max_arr=beta_max_arr, warmup_epochs_arr=warmup_epochs_arr, save_dir=os.path.join(save_dir,'plots'))
 
 
     def run_analysis(self, metrics_dicts=None, save_dir=None, run_name=None):
@@ -185,7 +182,7 @@ if __name__ == "__main__":
     # Seeds
     seeds = [random.randint(100,10000) for _ in range(1)]
     # Number of epochs
-    epochs = 1000
+    epochs = 10
     # Number of samples used in inference
     num_samples = 100
     # Number of Monte-Carlo trials used for training

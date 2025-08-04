@@ -1,0 +1,22 @@
+{
+    "desc": "quad (a=0.62, b=-0.98)",
+    "model": "GaussianHyperNetwork",
+    "seed": 487,
+    "rmse": 2874.85085032887,
+    "mean_nll": 32.32943705129177,
+    "training_time": 0.01090383529663086,
+    "timestamp": "2025-08-04T00:26:02.919216",
+    "epochs": 2,
+    "beta_param_dict": {
+        "beta_scheduler": "linear",
+        "warmup_epochs": 1,
+        "beta_max": 1.0
+    },
+    "x_min": -99.21546661931522,
+    "x_max": 98.45636161510767,
+    "region_interp": [
+        -1,
+        1
+    ],
+    "frac_train": 0.5
+}

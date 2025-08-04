@@ -1,0 +1,22 @@
+{
+    "desc": "quad (a=0.62, b=-0.98)",
+    "model": "DeterministicMLPNetwork",
+    "seed": 487,
+    "rmse": 2870.2314450031345,
+    "mean_nll": 4119114273936.4014,
+    "training_time": 0.01796746253967285,
+    "timestamp": "2025-08-04T00:26:25.138176",
+    "epochs": 2,
+    "beta_param_dict": {
+        "beta_scheduler": "linear",
+        "warmup_epochs": 1,
+        "beta_max": 1.0
+    },
+    "x_min": -99.21546661931522,
+    "x_max": 98.45636161510767,
+    "region_interp": [
+        -1,
+        1
+    ],
+    "frac_train": 0.5
+}

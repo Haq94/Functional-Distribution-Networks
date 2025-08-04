@@ -1,0 +1,22 @@
+{
+    "desc": "step",
+    "model": "BayesNetwork",
+    "seed": 6242,
+    "rmse": 2.687485481288371,
+    "mean_nll": 17.30998615756858,
+    "training_time": 0.02233099937438965,
+    "timestamp": "2025-08-04T00:50:38.898442",
+    "epochs": 2,
+    "beta_param_dict": {
+        "beta_scheduler": "linear",
+        "warmup_epochs": 1,
+        "beta_max": 1.0
+    },
+    "x_min": -99.60736729775014,
+    "x_max": 98.06636327586166,
+    "region_interp": [
+        -1,
+        1
+    ],
+    "frac_train": 0.5
+}

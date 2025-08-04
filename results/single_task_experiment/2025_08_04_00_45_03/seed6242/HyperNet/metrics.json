@@ -1,0 +1,22 @@
+{
+    "desc": "step",
+    "model": "HyperNetwork",
+    "seed": 6242,
+    "rmse": 265966.02708499297,
+    "mean_nll": 3.5368963781653748e+16,
+    "training_time": 0.011753559112548828,
+    "timestamp": "2025-08-04T00:50:26.194862",
+    "epochs": 2,
+    "beta_param_dict": {
+        "beta_scheduler": "linear",
+        "warmup_epochs": 1,
+        "beta_max": 1.0
+    },
+    "x_min": -99.60736729775014,
+    "x_max": 98.06636327586166,
+    "region_interp": [
+        -1,
+        1
+    ],
+    "frac_train": 0.5
+}

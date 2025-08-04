@@ -1,0 +1,22 @@
+{
+    "desc": "quad (a=0.62, b=-0.98)",
+    "model": "BayesNetwork",
+    "seed": 487,
+    "rmse": 2856.724332189007,
+    "mean_nll": 901935.9029013256,
+    "training_time": 0.021174907684326172,
+    "timestamp": "2025-08-04T00:25:41.654819",
+    "epochs": 2,
+    "beta_param_dict": {
+        "beta_scheduler": "linear",
+        "warmup_epochs": 1,
+        "beta_max": 1.0
+    },
+    "x_min": -99.21546661931522,
+    "x_max": 98.45636161510767,
+    "region_interp": [
+        -1,
+        1
+    ],
+    "frac_train": 0.5
+}
