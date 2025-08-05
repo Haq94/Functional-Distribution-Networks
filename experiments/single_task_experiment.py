@@ -161,15 +161,15 @@ if __name__ == "__main__":
     # model_type = ['DeepEnsembleNet', 'MLPNet', 'LP_FDNet'] 
     # model_type = ['LP_FDNet'] 
     # Seeds
-    seeds = [random.randint(100,10000) for _ in range(1)]
+    seeds = [random.randint(100,10000) for _ in range(20)]
     # Number of epochs
-    epochs = 2
+    epochs = 1000
     # Number of samples used in inference
     num_samples = 100
     # Number of Monte-Carlo trials used for training
-    MC = 2
+    MC = 1
     # Number of models for Deep Ensemble
-    num_models = 10
+    num_models = 100
     # Beta scheduler
     beta_scheduler = "linear"
     # Beta parameters
@@ -188,12 +188,12 @@ if __name__ == "__main__":
     # Save switch
     save_switch = True
     # Training region
-    region_interp = (-1,1)
+    region_interp = (-0.5,0.5)
     # Create data
-    input_type = "uniform_random"
+    input_type = "uniform"
     input_seed = random.randint(100,10000)
-    x_min = -100
-    x_max = 100
+    x_min = -1
+    x_max = 1
     n_interp = 10
     n_extrap = 100
     x = generate_grid(input_type=input_type, input_seed=input_seed, x_min=x_min, x_max=x_max, region_interp=region_interp, n_interp=n_interp, n_extrap=n_extrap)

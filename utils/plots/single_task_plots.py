@@ -484,10 +484,10 @@ def plot_single_task_overlay(
             ax.legend()
             fig.tight_layout()
             if save_dir:
-                fig.savefig(os.path.join(save_dir, f"{metric_label}_vs_x_seed{seed_date_time[0]}.png"))
+                save_plot(os.path.join(save_dir, 'metric_vs_x'), f"{metric_label}_vs_x")
             if show_figs:
                 plt.show()
-            plt.close(fig)
+            plt.close()
 
         # --- Loss Plots ---
         for label in losses:
@@ -510,10 +510,10 @@ def plot_single_task_overlay(
             ax.legend()
             fig.tight_layout()
             if save_dir:
-                fig.savefig(os.path.join(save_dir, f"{label}_vs_epoch_seed{seed_date_time[0]}.png"))
+                save_plot(os.path.join(save_dir, 'loss_vs_epoch'), f"{label}_vs_epoch")
             if show_figs:
                 plt.show()
-            plt.close(fig)
+            plt.close()
 
         # --- Scatter Plots ---
         def scatter_plot(x, y, xlabel, ylabel, title, fname):
@@ -527,24 +527,26 @@ def plot_single_task_overlay(
             plt.legend()
             plt.tight_layout()
             if save_dir:
-                fig.savefig(os.path.join(save_dir, fname))
+                save_plot(os.path.join(save_dir, 'calibration_scatter_plots'), fname)
             if show_figs:
                 plt.show()
-            plt.close(fig)
+            plt.close()
+
+            
 
         # Collect data for scatter plots
         var = {m: metrics["var"][seed_date_time][m] for m in stoch_models.intersection(model_types)}
         mse = {m: metrics["mse"][seed_date_time][m] for m in stoch_models.intersection(model_types)}
         bias = {m: metrics["bias"][seed_date_time][m] for m in stoch_models.intersection(model_types)}
-        if use_db_scale:
-            var_db = {m: 10 * np.log10(np.maximum(v, 1e-10)) for m, v in var.items()}
-            mse_db = {m: 10 * np.log10(np.maximum(mv, 1e-10)) for m, mv in mse.items()}
-            bias_db = {m: 10 * np.log10(np.maximum(b**2, 1e-10)) for m, b in bias.items()}
+        # dB Scatter Plots
+        var_db = {m: 10 * np.log10(np.maximum(v, 1e-10)) for m, v in var.items()}
+        mse_db = {m: 10 * np.log10(np.maximum(mv, 1e-10)) for m, mv in mse.items()}
+        bias_sq_db = {m: 10 * np.log10(np.maximum(b**2, 1e-10)) for m, b in bias.items()}
 
-            scatter_plot(var_db, mse_db, r"$\sigma_{\hat{y}}^2$ (dB)", "MSE (dB)", "MSE vs Variance (dB)", f"mse_vs_var_db_seed{seed_date_time[0]}.png")
-            scatter_plot(bias_db, mse_db, r"$Bias^2$ (dB)", "MSE (dB)", "MSE vs Bias (dB)", f"mse_vs_bias_db_seed{seed_date_time[0]}.png")
-            scatter_plot(var_db, bias_db, r"$\sigma_{\hat{y}}^2$ (dB)", "Bias (dB)", "Bias vs Variance (dB)", f"bias_vs_var_db_seed{seed_date_time[0]}.png")
-        else:
-            scatter_plot(var, mse, r"$\sigma_{\hat{y}}^2$", "MSE", "MSE vs Variance", f"mse_vs_var_seed{seed_date_time[0]}.png")
-            scatter_plot(bias, mse, r"$Bias$", "MSE", "MSE vs Bias", f"mse_vs_bias_seed{seed_date_time[0]}.png")
-            scatter_plot(var, bias, r"$\sigma_{\hat{y}}^2$", "Bias", "Bias vs Variance", f"bias_vs_var_seed{seed_date_time[0]}.png")
+        scatter_plot(var_db, mse_db, r"$\sigma_{\hat{y}}^2$ (dB)", r"$MSE$ (dB)", r"$MSE$ vs $\sigma_{\hat{y}}^2$ (dB)", "mse_vs_var_db")
+        scatter_plot(bias_sq_db, mse_db, r"$Bias^2$ (dB)", r"$MSE$ (dB)", r"$MSE$ vs $Bias^{2}$ (dB)", "mse_vs_bias_db")
+        scatter_plot(var_db, bias_sq_db, r"$\sigma_{\hat{y}}^2$ (dB)", r"$Bias^{2}$ (dB)", r"Bias^{2} vs $\sigma_{\hat{y}}^2$ (dB)", "bias_vs_var_db")
+        # Scatter Plots
+        scatter_plot(var, mse, r"$\sigma_{\hat{y}}^2$", r"$MSE$", r"$MSE$ vs $\sigma_{\hat{y}}^2$", "mse_vs_var")
+        scatter_plot(bias, mse, r"$Bias$", r"$MSE$", r"$MSE$ vs $Bias$", "mse_vs_bias")
+        scatter_plot(var, bias, r"$\sigma_{\hat{y}}^2$", r"$Bias$", r"Bias vs $\sigma_{\hat{y}}^2$", f"bias_vs_var")

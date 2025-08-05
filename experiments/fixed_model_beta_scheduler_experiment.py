@@ -134,7 +134,7 @@ class FixedModelBetaSchedulerExperiment:
 
         # Save metrics dict
         if save_switch:
-            save_dir = os.path.join("results", "fixed_model_beta_scheduler_experiment", f"run_{date_time}")
+            save_dir = os.path.join("results", "fixed_model_beta_scheduler_experiment", date_time.replace('-','_'), f"seed{seed}")
             os.makedirs(save_dir, exist_ok=True)
             np.savez_compressed(os.path.join(save_dir, "metrics_dict.npz"), metrics_dicts=metrics_dicts)
 
