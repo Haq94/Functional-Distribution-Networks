@@ -14,7 +14,7 @@ def save_analysis_arrays(metric_outputs, save_dir):
     os.makedirs(save_dir, exist_ok=True)
     keys = [
         "mean", "var", "std", "residual_precision", "residual_accuracy",
-        "bias", "mse", "bias_var_diff", "nll"
+        "bias", "mse", "bias_var_diff", "nlpd"
     ]
     for key, array in zip(keys, metric_outputs):
         np.save(os.path.join(save_dir, f"{key}.npy"), array)

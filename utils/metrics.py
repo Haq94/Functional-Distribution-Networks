@@ -19,7 +19,7 @@ def metrics(preds, y, eps=1e-6):
         bias:       (n_points,) predictive bias
         mse:        (n_points,) mean squared error
         bias_var_diff: (n_points,) |mse - (bias² + var)|
-        nll:        (n_points,) negative log likelihood per sample
+        nlpd:        (n_points,) negative log predictive distribution (NLPD) per sample
     """
     
     # Convert to numpy arrays
@@ -43,7 +43,7 @@ def metrics(preds, y, eps=1e-6):
     bias_var_diff = np.abs(mse - (var + bias**2))  # (n_points, 1)
 
     # Gaussian NLL per sample (n_points,)
-    nll = 0.5 * (np.log(2 * np.pi * var.squeeze()) + ((y - mean.squeeze()) ** 2) / var.squeeze())
+    nlpd = per_x_nlpd_from_samples_hist(preds=preds, y=y, bins=50, y_min=preds.min(), y_max=preds.max())
 
     return (
         mean.squeeze(),
@@ -54,8 +54,30 @@ def metrics(preds, y, eps=1e-6):
         bias.squeeze(),
         mse.squeeze(),
         bias_var_diff.squeeze(),
-        nll.squeeze()
+        nlpd.squeeze()
     )
+
+def per_x_nlpd_from_samples_hist(preds, y, bins=50, y_min=None, y_max=None, eps=1e-12):
+    """
+    preds: (S, N, 1) MC samples
+    y    : (N,)   ground-truth
+    returns: (N,) per-x NLPD using histogram density lookup
+    """
+    S, N, _ = preds.shape
+    if y_min is None: y_min = float(preds.min())
+    if y_max is None: y_max = float(preds.max())
+    edges = np.linspace(y_min, y_max, bins + 1)
+    dy = edges[1] - edges[0]
+
+    nlpd = np.empty(N, dtype=float)
+    for i in range(N):
+        hist, _ = np.histogram(preds[:, i], bins=edges, density=True)  # density=True => integrates to 1
+        # find bin for y[i]
+        b = np.searchsorted(edges, y[i], side='right') - 1
+        b = np.clip(b, 0, bins - 1)
+        p = hist[b]  # density at that bin
+        nlpd[i] = -np.log(p + eps)
+    return nlpd
 
 
 def get_summary(metric_outputs, y_t, model, desc, seed, training_time, epochs, beta_param_dict, x, region_interp, frac_train):
@@ -79,18 +101,18 @@ def get_summary(metric_outputs, y_t, model, desc, seed, training_time, epochs, b
         dict: Summary containing RMSE, NLL, and experiment metadata
     """
     mean_pred = metric_outputs[0]         # Predicted mean
-    nll_per_sample = metric_outputs[-1]   # Per-sample NLL
+    nlpd_per_sample = metric_outputs[-1]   # Per-sample NLL
 
     y_t_np = y_t.detach().cpu().numpy().squeeze()
     rmse = float(np.sqrt(np.mean((mean_pred - y_t_np) ** 2)))
-    mean_nll = float(np.mean(nll_per_sample))
+    mean_nlpd = float(np.mean(nlpd_per_sample))
 
     return {
         "desc": desc,
         "model": model.__class__.__name__,
         "seed": seed,
         "rmse": rmse,
-        "mean_nll": mean_nll,
+        "mean_nlpd": mean_nlpd,
         "training_time": training_time,
         "timestamp": datetime.now().isoformat(),
         "epochs": epochs,

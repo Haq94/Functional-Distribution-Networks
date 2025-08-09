@@ -10,9 +10,9 @@ def sample_function(seed=None):
     fn_type = np.random.choice(["sine", "quadratic", "step"])
     
     if fn_type == "sine":
-        a = np.random.uniform(0.5, 2.0)
-        b = np.random.uniform(1.0, 3.0)
-        return lambda x: a * np.sin(b * x), f"sine (a={a:.2f}, b={b:.2f})"
+        amp = np.random.uniform(0.5, 2.0)
+        freq = np.random.uniform(1.0, 3.0)
+        return lambda x: amp * np.sin(2*np.pi*freq * x), f"sine (amp={amp:.2f}, freq={freq:.2f})"
 
     elif fn_type == "quadratic":
         a = np.random.uniform(-1.0, 1.0)

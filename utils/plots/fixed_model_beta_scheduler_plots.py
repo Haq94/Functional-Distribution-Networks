@@ -17,7 +17,7 @@ def plot_training_metrics_overlay(metrics_dicts, seeds=None,
             
             fig, axes = plt.subplots(2, 2, figsize=(12, 8))
             metric_keys = ["losses_per_epoch", "mse_per_epoch", "kls_per_epoch", "beta_per_epoch"]
-            titles = ["Loss", "MSE", "KL Divergence", "$\\beta$"]
+            titles = [r"$Loss$ vs $Epoch$", r"$MSE$ vs $Epoch$", r"$KL$ $Divergence$ vs $Epoch$", r"$\beta$ vs $Epoch$"]
 
             handles = []
             labels = []
@@ -113,7 +113,10 @@ def plot_final_metrics_vs_x_overlay(metrics_dicts, seeds=None,
                         if interp_region:
                             x_left, x_right = interp_region[0], interp_region[1]
 
-                        label = f"{beta_scheduler}, β={beta:.2f}, warmup={warmup}"
+                        if beta_scheduler == 'constant':
+                            label = f"{beta_scheduler}, β={beta:.2f}"
+                        else:
+                            label = f"{beta_scheduler}, β={beta:.2f}, warmup={warmup}"
 
                         for i, key in enumerate(metric_keys):
                             raw_y = np.array(run_metrics.get(key))

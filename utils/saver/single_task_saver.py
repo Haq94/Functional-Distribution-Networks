@@ -4,7 +4,7 @@ import numpy as np
 import json
 from .general_saver import save_analysis_arrays
 
-def single_task_saver(metric_outputs, model, trainer, summary, x_train, y_train, x_test, y_test, save_dir):
+def single_task_saver(metric_outputs, model, trainer, summary, x_train, y_train, x_test, y_test, ind_test, ind_train, ind_interp, ind_extrap, save_dir):
     # Create directory
     os.makedirs(os.path.join(save_dir, "analysis"), exist_ok=True)
 
@@ -25,6 +25,13 @@ def single_task_saver(metric_outputs, model, trainer, summary, x_train, y_train,
              y_train=y_train.cpu().numpy(),
              x_test=x_test.cpu().numpy(),
              y_test=y_test.cpu().numpy())
+    
+    # Save indices
+    np.savez(os.path.join(save_dir, "analysis", "ind.npz"),
+             ind_test=ind_test,
+             ind_train=ind_train,
+             ind_interp=ind_interp,
+             ind_extrap=ind_extrap)
 
     # Save summary
     with open(os.path.join(save_dir, "metrics.json"), "w") as f:

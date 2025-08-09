@@ -48,7 +48,7 @@ class SingleTaskExperimentLoader:
         metrics = {}
         metric_names = [
             "mean", "var", "std", "residual_precision", "residual_accuracy",
-            "bias", "mse", "bias_var_diff", "nll"
+            "bias", "mse", "bias_var_diff", "nlpd"
         ]
         for name in metric_names:
             path = os.path.join(self.analysis_path, f"{name}.npy")
@@ -66,6 +66,16 @@ class SingleTaskExperimentLoader:
             "y_train": data["y_train"],
             "x_test": data["x_test"],
             "y_test": data["y_test"]
+        }
+    
+    def load_ind(self):
+        path = os.path.join(self.analysis_path, "ind.npz")
+        ind = np.load(path)
+        return {
+            "ind_train": ind["ind_train"],
+            "ind_test": ind["ind_test"],
+            "ind_interp": ind["ind_interp"],
+            "ind_extrap": ind["ind_extrap"]
         }
 
     @staticmethod
@@ -143,16 +153,17 @@ def single_task_overlay_loader(seeds, date_times):
     # Initialize data containers
     loaders = {}
     x_train, y_train, x_test, y_test = {}, {}, {}, {}
+    ind_test, ind_train, ind_interp, ind_extrap = {}, {}, {}, {}
 
     metrics = {name: {} for name in [
         "mean", "var", "std", "res_precision", "res_accuracy",
-        "bias", "mse", "bias_var_diff", "nll"
+        "bias", "mse", "bias_var_diff", "nlpd"
     ]}
 
     losses = {name: {} for name in ["losses", "mses", "kls", "betas"]}
 
     summary = {name: {} for name in [
-        'desc', 'model', 'seed', 'rmse', 'mean_nll', 'training_time', 'timestamp',
+        'desc', 'model', 'seed', 'rmse', 'mean_nlpd', 'training_time', 'timestamp',
         'epochs', 'beta_param_dict', 'x_min', 'x_max', 'region_interp', 'frac_train'
     ]}
 
@@ -196,204 +207,17 @@ def single_task_overlay_loader(seeds, date_times):
                 y_train[(seed, date_time)] = data["y_train"]
                 x_test[(seed, date_time)] = data["x_test"]
                 y_test[(seed, date_time)] = data["y_test"]
+
+                ind = loader.load_ind()
+                ind_train[(seed, date_time)] = ind["ind_train"]
+                ind_test[(seed, date_time)] = ind["ind_test"]
+                ind_interp[(seed, date_time)] = ind["ind_interp"]
+                ind_extrap[(seed, date_time)] = ind["ind_extrap"]
+
         except Exception as e:
             print(f"Failed to load data for {seed}_{date_time}: {e}")
 
     print("Loaded runs:", list(loaders.keys()))
 
-    return loaders, metrics, losses, summary, x_train, y_train, x_test, y_test, seed_date_time_list
-
-# OLD CODE============================================================================================
-
-# import re
-# import os
-# import json
-# import numpy as np
-
-# from utils.general import get_latest_run_dir, extract_seed_from_dir, extract_timestamp_from_dir, get_all_experiment_runs, get_seed_time_pairs_for_models
-
-# class SingleTaskExperimentLoader:
-#     def __init__(self, model_type, seed, date_time, base_dir="results//single_task_experiment"):
-#         """
-#         Utility to load metrics, losses, summaries, and input/output data.
-
-#         Args:
-#             model_type (str): Name of the model used (e.g., 'IC_FDNet').
-#             seed (int): Seed for the experiment.
-#             date_time (str): Timestamp string in format 'YYYY-MM-DD_HH-MM-SS'.
-#             base_dir (str): Root directory where results are saved.
-#         """
-#         self.model_type = model_type
-#         self.seed = seed
-#         self.date_time = date_time
-#         self.base_dir = base_dir
-
-#         self.run_name = f"{model_type}_seed{seed}_{date_time}"
-#         self.run_path = os.path.join(base_dir, model_type, self.run_name)
-#         self.analysis_path = os.path.join(self.run_path, "analysis")
-
-#     def load_summary(self):
-#         path = os.path.join(self.run_path, "metrics.json")
-#         with open(path, "r") as f:
-#             return json.load(f)
-
-#     def load_loss_curve(self):
-#         path = os.path.join(self.analysis_path, "loss_curve_data.npz")
-#         data = np.load(path)
-#         return {
-#             "losses": data["losses"],
-#             "mses": data["mses"],
-#             "kls": data["kls"],
-#             "betas": data["betas"]
-#         }
-
-#     def load_metrics(self):
-#         """
-#         Load individual metric arrays saved as .npy files.
-
-#         Returns:
-#             dict: Dictionary with metric names as keys and numpy arrays as values.
-#         """
-#         metrics = {}
-#         metric_names = [
-#             "mean", "var", "std", "residual_precision", "residual_accuracy",
-#             "bias", "mse", "bias_var_diff", "nll"
-#         ]
-#         for name in metric_names:
-#             path = os.path.join(self.analysis_path, f"{name}.npy")
-#             if os.path.exists(path):
-#                 metrics[name if "residual" not in name else name.replace("residual_", "res_")] = np.load(path)
-#             else:
-#                 print(f"Warning: {name}.npy not found in {self.analysis_path}")
-#         return metrics
-
-
-#     def load_data(self):
-#         path = os.path.join(self.analysis_path, "data.npz")
-#         data = np.load(path)
-#         return {
-#             "x_train": data["x_train"],
-#             "y_train": data["y_train"],
-#             "x_test": data["x_test"],
-#             "y_test": data["y_test"]
-#         }
-    
-#     @staticmethod
-#     def get_latest_loader(model_type, base_dir="results//single_task_experiment"):
-#         run_dir = get_latest_run_dir(model_type, base_dir=base_dir)
-#         if run_dir:
-#             seed = extract_seed_from_dir(run_dir)  # optional utility
-#             date_time = extract_timestamp_from_dir(run_dir)  # optional utility
-#             return SingleTaskExperimentLoader(model_type, seed, date_time, base_dir)
-#         else:
-#             return None
-
-# def single_task_overlay_loader(seeds, date_time):
-#     # Models and metadata
-#     model_types = ['LP_FDNet', 'HyperNet', 'IC_FDNet', 'BayesNet', 'GaussHyperNet', 'MLPNet', 'DeepEnsembleNet']
-#     # Check and make sure the seed/ date-time pair is in the list
-#     runs_list = get_all_experiment_runs(base_dir="results//single_task_experiment")
-#     seed_date_time_list = get_seed_time_pairs_for_models(runs=runs_list, model_type_list=model_types)
-#     seed_date_time_list = [(seed, date_time) for seed, date_time in seed_date_time_list if seed in seeds and date_time in date_time]
-
-#     # Pre-allocate dictionaries
-#     loaders = {}
-#     x_train, y_train, x_test, y_test = {}, {}, {}, {}
-
-#     # Metrics: metrics[metric_name][(seed, date_time)][model]
-#     metrics = {
-#         "mean": {}, "var": {}, "std": {}, "res_precision": {}, "res_accuracy": {},
-#         "bias": {}, "mse": {}, "bias_var_diff": {}, "nll": {}
-#     }
-
-#     # Losses: losses[loss_type][(seed, date_time)][model]
-#     losses = {
-#         "losses": {}, "mses": {}, "kls": {}, "betas": {}
-#     }
-
-#     # Summary: summary[summary_name][(seed, date_time)][model]
-#     summary = {
-#     'desc': {}, 'model': {}, 'seed': {}, 'rmse': {}, 'mean_nll': {}, 'training_time': {}, 'timestamp': {},
-#     'epochs': {}, 'beta_param_dict': {}, 'x_min': {}, 'x_max': {}, 'region_interp': {}, 'frac_train': {}
-#     }
-
-#     for seed, date_time in seed_date_time_list:
-#         for model in model_types:
-#             run_tag = f"{model}_seed{seed}_{date_time}"
-#             try:
-#                 # Initialize loader
-#                 loader = SingleTaskExperimentLoader(model, seed, date_time)
-
-#                 # Load and store metrics
-#                 metric_dict = loader.load_metrics()
-#                 for k in metrics:
-#                     metrics[k].setdefault((seed, date_time), {})[model] = metric_dict[k]
-
-#                 # Load and store losses
-#                 loss_dict = loader.load_loss_curve()
-#                 for k in losses:
-#                     losses[k].setdefault((seed, date_time), {})[model] = loss_dict[k]
-
-#                 # Load summary
-#                 summary_dict = loader.load_summary()
-#                 for k in summary:
-#                     summary[k].setdefault((seed, date_time), {})[model] = summary_dict[k]
-
-#                 # Store loader
-#                 loaders.setdefault((seed, date_time), {})[model] = loader
-
-#             except FileNotFoundError:
-#                 print(f"Skipping missing result: {run_tag}")
-#             finally:
-#                 print(f"Checked: {run_tag}")
-
-#         # Load data (only once per (seed, date_time))
-#         try:
-#             data = loader.load_data()
-#             x_train[(seed, date_time)] = data["x_train"]
-#             y_train[(seed, date_time)] = data["y_train"]
-#             x_test[(seed, date_time)] = data["x_test"]
-#             y_test[(seed, date_time)] = data["y_test"]
-#         except Exception as e:
-#             print(f"Failed to load data for {seed}_{date_time}: {e}")
-
-#     print("Loaded runs:", list(loaders.keys()))
-
-#     return loaders, metrics, losses, summary, x_train, y_train, x_test, y_test, seed_date_time_list
-
-# if __name__ == '__main__':
-#     # Imports
-#     from general import get_latest_run_dir
-
-#     # Model and metrics
-#     model_type = 'IC_FDNet'
-#     metric = 'residual_scatter'
-
-#     # Get latest run directory
-#     run_dir = get_latest_run_dir(model_type)
-
-#     # Create instance
-#     seed = extract_seed_from_dir(run_dir)
-#     date_time = extract_timestamp_from_dir(run_dir)
-#     loader = SingleTaskExperimentLoader(model_type, seed, date_time, base_dir="results//single_task_experiment")
-
-#     # Load metrics
-#     metrics = loader.load_metrics()
-
-#     # Load summary
-#     summary = loader.load_summary()
-
-#     # Loss curve data
-#     loss_curve_data = loader.load_loss_curve()
-
-#     # Load data
-#     data = loader.load_data()
-
-#     # Test "get_latest_loader"
-#     loader = SingleTaskExperimentLoader.get_latest_loader(model_type)
-
-
-
-
-    
+    return loaders, metrics, losses, summary, x_train, y_train, x_test, y_test, ind_train, ind_test, ind_interp, ind_extrap, seed_date_time_list
 

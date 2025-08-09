@@ -27,14 +27,14 @@ class SingleTaskExperiment:
     def run_experiments(self, x=np.linspace(start=-10,stop=10,num=500),
                             region_interp=(-1,1),
                             frac_train=0.5, epochs=1000, beta_param_dict=None, 
-                            num_samples=100, MC=1, num_models=None, analysis=True, save_switch=False):
+                            num_samples=100, MC=1, num_models=None, analysis=True, save_switch=False, ensemble_switch=True):
         # Parameters
         model_types = self.model_types
         seeds = self.seeds
 
-        if model_types == 'DeepEnsembleNet' and num_models is None:
+        if 'DeepEnsembleNet' in model_types and num_models is None:
             num_models = num_samples
-
+        
         # Make dir
         results_dir = "results"
         os.makedirs(results_dir, exist_ok=True)
@@ -52,9 +52,6 @@ class SingleTaskExperiment:
                 # Set seed
                 torch.manual_seed(seed)
                 np.random.seed(seed)
-
-                # # Run name
-                # run_name = f"{model_type}_seed{seed}_{date_time}"
 
                 # Pre-allocate save dir
                 save_dir = None
@@ -79,11 +76,15 @@ class SingleTaskExperiment:
                                           num_models=num_models
                                           )
 
+                # Choose number of epochs for Deep Ensemble 
+                is_de = (model_type == 'DeepEnsembleNet')
+                epochs_to_use = epochs if not (is_de and ensemble_switch) else max(1, epochs // num_models)
+
                 # Run experiment
                 data = (x_train, y_train, x_test, y_test, desc)
                 preds, data, training_time, metric_outputs, trainer = exp_inst.run_experiments(
                         data=data,
-                        epochs=epochs,
+                        epochs=epochs_to_use,
                         beta_param_dict=beta_param_dict,
                         num_samples=num_samples,
                         MC = MC
@@ -98,13 +99,13 @@ class SingleTaskExperiment:
                         summary = get_summary(metric_outputs, y_test, trainer.model, desc, seed, training_time, epochs, beta_param_dict, x, region_interp, frac_train)
 
                         # Save experiment output
-                        single_task_saver(metric_outputs, trainer.model, trainer, summary, x_train, y_train, x_test, y_test, save_dir)
+                        single_task_saver(metric_outputs, trainer.model, trainer, summary, x_train, y_train, x_test, y_test, ind_test, ind_train, ind_interp, ind_extrap,  save_dir)
 
                     # Plot and save visuals
                     name = desc + ', Model: ' + model_type
                     plot_save_dir = None if save_dir is None else os.path.join(save_dir, "plots")
                     capabilities = self.get_capabilities(model_type)
-                    single_task_plots(trainer, preds, x_train, y_train, x_test, y_test, name, ind_train, region_interp, metric_outputs=metric_outputs, block=False, save_dir=plot_save_dir, capabilities=capabilities)
+                    single_task_plots(trainer, preds, x_train, y_train, x_test, y_test, name, ind_train, ind_test, ind_interp, ind_extrap, region_interp, metric_outputs=metric_outputs, block=False, save_dir=plot_save_dir, capabilities=capabilities)
                     
             print(f"Completed: {model_type} | seed: {seed} | training time: {training_time}s")
 
@@ -126,7 +127,7 @@ class SingleTaskExperiment:
             # Stochastic Metrics
             stoch_metrics = {"var", "nll", "std"}
             # Re-load data
-            loaders, metrics, losses, summary, x_train, y_train, x_test, y_test, seed_date_time_list = single_task_overlay_loader(seeds, date_time)
+            loaders, metrics, losses, summary, x_train, y_train, x_test, y_test, ind_train, ind_test, ind_interp, ind_extrap, seed_date_time_list = single_task_overlay_loader(seeds, date_time)
             for seed, date_time in seed_date_time_list:
                 # Save dir
                 save_dir = os.path.join("results", 'single_task_experiment', date_time.replace('-','_'), f"seed{seed}", 'overlay_plots')
@@ -138,8 +139,13 @@ class SingleTaskExperiment:
                     y_train=y_train,
                     x_test=x_test,
                     y_test=y_test,
+                    ind_train=ind_train,
+                    ind_test=ind_test,
+                    ind_interp=ind_interp,
+                    ind_extrap=ind_extrap,
                     metrics=metrics,
                     losses=losses,
+                    summary=summary,
                     stoch_models=stoch_models,
                     stoch_metrics=stoch_metrics,
                     model_colors=model_colors,
@@ -147,7 +153,6 @@ class SingleTaskExperiment:
                     show_figs=False,
                     use_db_scale=True
                     )
-
 
     def get_capabilities(self, model_type):
         capabilities = {"mean", "bias"}  # always
@@ -159,9 +164,9 @@ if __name__ == "__main__":
     # Model type
     model_type = ['IC_FDNet', 'LP_FDNet', 'HyperNet', 'BayesNet', 'GaussHyperNet', 'MLPNet', 'DeepEnsembleNet'] 
     # model_type = ['DeepEnsembleNet', 'MLPNet', 'LP_FDNet'] 
-    # model_type = ['LP_FDNet'] 
+    # model_type = ['LP_FDNet', 'DeepEnsembleNet', 'MLPNet'] 
     # Seeds
-    seeds = [random.randint(100,10000) for _ in range(20)]
+    seeds = [random.randint(100,10000) for _ in range(10)]
     # Number of epochs
     epochs = 1000
     # Number of samples used in inference
@@ -169,15 +174,17 @@ if __name__ == "__main__":
     # Number of Monte-Carlo trials used for training
     MC = 1
     # Number of models for Deep Ensemble
-    num_models = 100
+    num_models = 5
+    # Ensemble switch (if True divide the number of epochs by the number of models)
+    ensemble_switch = False
     # Beta scheduler
     beta_scheduler = "linear"
     # Beta parameters
     if beta_scheduler == "linear":
         # Warm up epochs
-        warmup_epochs = round(epochs/2)
+        warmup_epochs = round(0.75*epochs)
         # Beta max
-        beta_max = 1.0
+        beta_max = 0.5
         # Beta parameter dictionary
         beta_param_dict = {"beta_scheduler": beta_scheduler,
                            "warmup_epochs": warmup_epochs, "beta_max": beta_max}
@@ -188,23 +195,23 @@ if __name__ == "__main__":
     # Save switch
     save_switch = True
     # Training region
-    region_interp = (-0.5,0.5)
+    region_interp = (-10,10)
     # Create data
     input_type = "uniform"
     input_seed = random.randint(100,10000)
-    x_min = -1
-    x_max = 1
-    n_interp = 10
-    n_extrap = 100
+    x_min = -100
+    x_max = 100
+    n_interp = 200
+    n_extrap = 1000
     x = generate_grid(input_type=input_type, input_seed=input_seed, x_min=x_min, x_max=x_max, region_interp=region_interp, n_interp=n_interp, n_extrap=n_extrap)
     # Fraction of points of data points in region used for training
-    frac_train = 0.5
+    frac_train = 0.7
     # Create experiment class instance
     exp_class = SingleTaskExperiment(model_type=model_type, seeds=seeds)
     # Run experiment
     exp_class.run_experiments(x=x, region_interp=region_interp, frac_train=frac_train,
                                 epochs=epochs, beta_param_dict=beta_param_dict,
                                     num_samples=num_samples, MC=MC, num_models=num_models,
-                                    analysis=analysis, save_switch=save_switch
+                                    analysis=analysis, save_switch=save_switch, ensemble_switch=ensemble_switch
                                     )
     print('Single Task Experiment Completed')
