@@ -12,11 +12,11 @@ def save_analysis_arrays(metric_outputs, save_dir):
         save_dir (str): directory to save .npy files into
     """
     os.makedirs(save_dir, exist_ok=True)
-    keys = [
-        "mean", "var", "std", "residual_precision", "residual_accuracy",
-        "bias", "mse", "bias_var_diff", "nlpd"
-    ]
-    for key, array in zip(keys, metric_outputs):
+    # keys = [
+    #     "mean", "var", "std", "residual_precision", "residual_accuracy",
+    #     "bias", "mse", "bias_var_diff", "nlpd_kde", "nlpd_hist", "pdf_kde", "pdf_hist"
+    # ]
+    for key, array in metric_outputs.items():
         np.save(os.path.join(save_dir, f"{key}.npy"), array)
 
 def save_plot(save_dir, plot_name, dpi=300, formats=("pkl", "png", "pdf"), fig=None):

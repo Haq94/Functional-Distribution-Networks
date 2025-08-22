@@ -50,7 +50,7 @@ class GaussianHyperLayer(nn.Module):
         else:
             return out
 
-class GaussianHyperNetwork(nn.Module):
+class GaussianHyperNet(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, hyper_hidden_dim, latent_dim=10, prior_std=1.0):
         super().__init__()
         self.layer1 = GaussianHyperLayer(input_dim, hidden_dim, hyper_hidden_dim, latent_dim, prior_std)

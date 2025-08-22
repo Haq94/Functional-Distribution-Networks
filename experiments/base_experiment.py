@@ -3,10 +3,14 @@ import time
 import torch
 import numpy as np
 from tqdm import tqdm
-from training.single_task_trainer import SingleTaskTrainer
+
 from utils.metrics import metrics
 from utils.saver.base_experiment_saver import base_experiment_saver
 
+if False:
+    from training.single_task_trainer_delete import SingleTaskTrainer
+else:
+    from training.single_task_trainer import SingleTaskTrainer
 
 class BaseExperiment:
     def __init__(self, model_type, seed=0, hidden_dim=32, hyper_hidden_dim=64, num_models=5, device=None):
@@ -67,7 +71,7 @@ class BaseExperiment:
         # === Train ===
         trainer = SingleTaskTrainer(model)
         start_time = time.time()
-        trainer.train(x=x_train, y=y_train, epochs=epochs, beta_param_dict=beta_param_dict, MC=MC)
+        trainer.train(x_train=x_train, y_train=y_train, epochs=epochs, beta_param_dict=beta_param_dict, MC=MC)
         training_time = time.time() - start_time
 
         # === Evaluate ===
@@ -107,28 +111,28 @@ class BaseExperiment:
         return preds, data, training_time, metric_outputs, trainer
 
     def build_model(self, model_type, input_dim):
-        from models.fdnet import IC_FDNetwork, LP_FDNetwork
-        from models.hypernet import HyperNetwork
-        from models.bayesnet import BayesNetwork
-        from models.gausshypernet import GaussianHyperNetwork
-        from models.mlpnet import DeterministicMLPNetwork
-        from models.deepensemblenet import DeepEnsembleNetwork
+        from models.fdnet import IC_FDNet, LP_FDNet
+        from models.hypernet import HyperNet
+        from models.bayesnet import BayesNet
+        from models.gausshypernet import GaussianHyperNet
+        from models.mlpnet import MLPNet
+        from models.deepensemblenet import DeepEnsembleNet
 
         if model_type == 'IC_FDNet':
-            return IC_FDNetwork(input_dim, self.hidden_dim, input_dim, self.hyper_hidden_dim)
+            return IC_FDNet(input_dim, self.hidden_dim, input_dim, self.hyper_hidden_dim)
         elif model_type == 'LP_FDNet':
-            return LP_FDNetwork(input_dim, self.hidden_dim, input_dim, self.hyper_hidden_dim)
+            return LP_FDNet(input_dim, self.hidden_dim, input_dim, self.hyper_hidden_dim)
         elif model_type == 'HyperNet':
-            return HyperNetwork(input_dim, self.hidden_dim, input_dim, self.hyper_hidden_dim)
+            return HyperNet(input_dim, self.hidden_dim, input_dim, self.hyper_hidden_dim)
         elif model_type == 'BayesNet':
-            return BayesNetwork(input_dim, self.hidden_dim, input_dim)
+            return BayesNet(input_dim, self.hidden_dim, input_dim)
         elif model_type == 'GaussHyperNet':
-            return GaussianHyperNetwork(input_dim, self.hidden_dim, input_dim, self.hyper_hidden_dim)
+            return GaussianHyperNet(input_dim, self.hidden_dim, input_dim, self.hyper_hidden_dim)
         elif model_type == 'MLPNet':
-            return DeterministicMLPNetwork(input_dim, self.hidden_dim, input_dim, dropout_rate=0.1)
+            return MLPNet(input_dim, self.hidden_dim, input_dim, dropout_rate=0.1)
         elif model_type == 'DeepEnsembleNet':
             seed_list = [np.random.randint(0, 10000) for _ in range(self.num_models)]
-            return DeepEnsembleNetwork(DeterministicMLPNetwork,
+            return DeepEnsembleNet(MLPNet,
                                        self.num_models,
                                        seed_list,
                                        input_dim=input_dim,
@@ -145,12 +149,13 @@ if __name__ == "__main__":
     from utils.loader.general_loader import load_toy_task_regression
     # Model type
     model_type = 'LP_FDNet' 
+    # model_type = 'DeepEnsembleNet'
     # Data loader
     data_loader_fn = load_toy_task_regression
     # Seeds
     seed = random.randint(100,10000) 
     # Number of epochs
-    epochs = 2
+    epochs = 1000
     # Beta scheduler
     beta_scheduler = "linear"
     # Beta parameters

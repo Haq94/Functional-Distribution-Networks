@@ -1,7 +1,7 @@
 import torch.nn as nn
 import torch.nn.functional as F
 
-class DeterministicMLPNetwork(nn.Module):
+class MLPNet(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, dropout_rate=0.0):
         super().__init__()
         self.fc1 = nn.Linear(input_dim, hidden_dim)

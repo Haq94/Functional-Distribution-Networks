@@ -22,35 +22,52 @@ def sample_function(seed=None):
     else: 
         return lambda x: np.where(x > 0, 1.0, -1.0), "step"
 
-def generate_meta_task(n_context=10, n_target=10, 
-                       x_range=None, 
-                       x_context_range=(-3, -1), 
-                       x_target_range=(1, 3),
-                       seed=None):
-    f, desc = sample_function(seed=seed)
+def generate_meta_task(
+    n_train=10, n_val=5, n_test=10,
+    x_range=None,
+    x_train_range=(-3, -1),
+    x_val_range=(-2, -1),
+    x_test_range=(1, 3),
+    seed=None,
+    dtype=torch.float64,   # match your .double() training
+    device=None
+):
+    rng = np.random.default_rng(seed)
+    f, desc = sample_function(seed=seed)  # keep your existing behavior
+
+    def _np_to_torch(a):
+        # ensure 2D (n,1), then to desired dtype/device
+        a = np.asarray(a).reshape(-1, 1)
+        return torch.as_tensor(a, dtype=dtype, device=device)
 
     if x_range is not None:
-        # Sample context + target together (used for joint tasks)
-        x_all = np.random.uniform(*x_range, size=(n_context + n_target, 1))
+        # Sample context + target together (joint tasks)
+        x_all = rng.uniform(*x_range, size=(n_train + n_test + n_val, 1))
         y_all = f(x_all)
-        x_context = torch.tensor(x_all[:n_context], dtype=torch.float32)
-        y_context = torch.tensor(y_all[:n_context], dtype=torch.float32)
-        x_target = torch.tensor(x_all[n_context:], dtype=torch.float32)
-        y_target = torch.tensor(y_all[n_context:], dtype=torch.float32)
+        x_train = _np_to_torch(x_all[:n_train])
+        y_train = _np_to_torch(y_all[:n_train])
+        x_val   = _np_to_torch(x_all[n_train:n_train+n_val])
+        y_val   = _np_to_torch(y_all[n_train:n_train+n_val])
+        x_test  = _np_to_torch(x_all[n_train+n_val:])
+        y_test  = _np_to_torch(y_all[n_train+n_val:])
     else:
-        # Sample context and target separately from disjoint domains
-        x_context = np.random.uniform(*x_context_range, size=(n_context, 1))
-        x_target = np.random.uniform(*x_target_range, size=(n_target, 1))
-        y_context = f(x_context)
-        y_target = f(x_target)
+        # Disjoint domains
+        x_train_np = rng.uniform(*x_train_range, size=(n_train, 1))
+        x_val_np   = rng.uniform(*x_val_range,   size=(n_val,   1))
+        x_test_np  = rng.uniform(*x_test_range,  size=(n_test,  1))
 
-        x_context = torch.tensor(x_context, dtype=torch.float32)
-        y_context = torch.tensor(y_context, dtype=torch.float32)
-        x_target = torch.tensor(x_target, dtype=torch.float32)
-        y_target = torch.tensor(y_target, dtype=torch.float32)
+        y_train_np = f(x_train_np)
+        y_val_np   = f(x_val_np)
+        y_test_np  = f(x_test_np)
 
-    # return x_context.squeeze(), y_context.squeeze(), x_target.squeeze(), y_target.squeeze(), desc
-    return x_context, y_context, x_target, y_target, desc
+        x_train = _np_to_torch(x_train_np)
+        y_train = _np_to_torch(y_train_np)
+        x_val   = _np_to_torch(x_val_np)
+        y_val   = _np_to_torch(y_val_np)
+        x_test  = _np_to_torch(x_test_np)
+        y_test  = _np_to_torch(y_test_np)
+
+    return x_train, y_train, x_val, y_val, x_test, y_test, desc
 
 def generate_grid(input_type=None, input_seed=0, x_min=-10, x_max=10, region_interp=(-1,1), n_interp=10, n_extrap=100):
     if input_type == "uniform_random":
@@ -68,7 +85,7 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
     # Use disjoint context/target domains for testing extrapolation
-    x_c, y_c, x_t, y_t, desc = generate_meta_task(n_context=10, n_target=10)
+    x_c, y_c, x_t, y_t, desc = generate_meta_task(n_train=10, n_test=10)
 
     # Combine and sort for visualization
     x_plot = torch.cat([x_c, x_t]).squeeze().numpy()

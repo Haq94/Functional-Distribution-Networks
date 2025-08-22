@@ -80,7 +80,7 @@ class Experiments:
 
                 # Train
                 start_time = time.time()
-                trainer.train(x=x_train, y=y_train, epochs=epochs, beta_param_dict=beta_param_dict)
+                trainer.train(x_train=x_train, y_train=y_train, epochs=epochs, beta_param_dict=beta_param_dict)
                 training_time = time.time() - start_time
 
                 # Evaluate

@@ -41,15 +41,15 @@ class FDNLayer(nn.Module):
                        self.bias_param_dim, self.bias_param_dim]
         
         if sample:
-            w_mu, w_log_sigma, b_mu, b_log_sigma = torch.split(h, split_sizes, dim=-1)
+            w_mu, w_rho, b_mu, b_rho = torch.split(h, split_sizes, dim=-1)
 
             # Reparameterization
             if use_softplus:
-                w_sigma = 1e-3 + F.softplus(w_log_sigma)
-                b_sigma = 1e-3 + F.softplus(b_log_sigma)
+                w_sigma = 1e-3 + F.softplus(w_rho)
+                b_sigma = 1e-3 + F.softplus(b_rho)
             else:
-                w_sigma = torch.exp(w_log_sigma)
-                b_sigma = torch.exp(b_log_sigma)
+                w_sigma = torch.exp(w_rho)
+                b_sigma = torch.exp(b_rho)
 
             W = w_mu + w_sigma * torch.randn_like(w_mu, device=w_mu.device)
             b = b_mu + b_sigma * torch.randn_like(b_mu, device=b_mu.device)
@@ -63,13 +63,13 @@ class FDNLayer(nn.Module):
         b = b.view(B, self.output_dim, 1)
 
         if return_kl:
-            kl_w = compute_kl_divergence(w_mu, w_log_sigma, use_softplus=use_softplus)
-            kl_b = compute_kl_divergence(b_mu, b_log_sigma, use_softplus=use_softplus)
+            kl_w = compute_kl_divergence(w_mu, w_rho, use_softplus=use_softplus)
+            kl_b = compute_kl_divergence(b_mu, b_rho, use_softplus=use_softplus)
             return W, b, kl_w + kl_b
         else:
             return W, b
 
-class LP_FDNetwork(nn.Module):
+class LP_FDNet(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, hyper_hidden_dim):
         super().__init__()
         self.fdn1 = FDNLayer(input_dim, input_dim, hidden_dim, hyper_hidden_dim)
@@ -108,7 +108,7 @@ class LP_FDNetwork(nn.Module):
             return x.squeeze(-1), kl1 + kl2
         return x.squeeze(-1)
     
-class IC_FDNetwork(nn.Module):
+class IC_FDNet(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, hyper_hidden_dim):
         super().__init__()
         self.fdn1 = FDNLayer(input_dim, input_dim, hidden_dim, hyper_hidden_dim)

@@ -1,13 +1,13 @@
 import torch
 import torch.nn.functional as F
 
-def compute_kl_divergence(mu, log_sigma, prior_mu=0.0, prior_sigma=1.0, reduction='mean', use_softplus=False):
+def compute_kl_divergence(mu, rho, prior_mu=0.0, prior_sigma=1.0, reduction='mean', use_softplus=False):
     """
     Compute total KL divergence between N(mu, sigma^2) and N(prior_mu, prior_sigma^2)
 
     Args:
         mu (Tensor): shape (B, D), posterior mean
-        log_sigma (Tensor): shape (B, D), log std dev of posterior (or pre-softplus parameter)
+        rho (Tensor): shape (B, D), log std dev of posterior (or pre-softplus parameter)
         prior_mu (float): prior mean
         prior_sigma (float): prior std dev
         reduction (str): 'mean' (default), 'sum', or 'none'
@@ -17,9 +17,9 @@ def compute_kl_divergence(mu, log_sigma, prior_mu=0.0, prior_sigma=1.0, reductio
         kl (Tensor): scalar KL loss (or per-sample vector if reduction='none')
     """
     if use_softplus:
-        sigma = 1e-3 + F.softplus(log_sigma)
+        sigma = 1e-3 + F.softplus(rho)
     else:
-        sigma = torch.exp(log_sigma)
+        sigma = torch.exp(rho)
 
     sigma_sq = sigma ** 2
     prior_sigma_sq = prior_sigma ** 2

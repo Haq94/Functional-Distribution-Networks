@@ -38,7 +38,7 @@ class HyperLayer(nn.Module):
         b = b_flat.view(B, self.output_dim, 1)
         return W, b
 
-class HyperNetwork(nn.Module):
+class HyperNet(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, hyper_hidden_dim):
         super().__init__()
         self.input_dim = input_dim

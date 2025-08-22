@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-class DeepEnsembleNetwork(nn.Module):
+class DeepEnsembleNet(nn.Module):
     def __init__(self, network_class, num_models=5, seed_list=None, *net_args, **net_kwargs):
         """
         Args:

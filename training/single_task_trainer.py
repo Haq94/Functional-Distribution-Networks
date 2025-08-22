@@ -21,7 +21,7 @@ class SingleTaskTrainer:
         self.betas = []
 
         # Handle optimizer(s)
-        if model.__class__.__name__ == 'DeepEnsembleNetwork':
+        if model.__class__.__name__ == 'DeepEnsembleNet':
             self.optimizers = [
                 torch.optim.Adam(submodel.parameters(), lr=lr)
                 for submodel in model.models
@@ -30,6 +30,8 @@ class SingleTaskTrainer:
         else:
             self.optimizer = optimizer or torch.optim.Adam(self.model.parameters(), lr=lr)
 
+            
+
 
     def _model_forward(self, x, return_kl=True, sample=True):
         if hasattr(self.model, 'forward') and ('return_kl' and 'sample' in self.model.forward.__code__.co_varnames):
@@ -37,12 +39,12 @@ class SingleTaskTrainer:
         else:
             return self.model(x), torch.tensor(0.0, device=x.device)
 
-    def train(self, x, y, epochs=1000, beta_param_dict=None,
+    def train(self, x_train, y_train, epochs=1000, beta_param_dict=None, x_val=None, y_val=None,
             print_every=100, batch_size=10, grad_clip=True, MC=1):
 
-        x, y = x.double().to(self.device), y.double().to(self.device)
-        N = x.shape[0]
-        if N == 0:
+        x_train, y_train = x_train.double().to(self.device), y_train.double().to(self.device)
+        N_train = x_train.shape[0]
+        if N_train == 0:
             raise ValueError("Empty context set provided.")
         
         # If beta parameter dictionary is None then default to linear
@@ -56,7 +58,7 @@ class SingleTaskTrainer:
             beta_param_dict = {"beta_scheduler": beta_scheduler,
                             "warmup_epochs": warmup_epochs, "beta_max": beta_max}
 
-        dataset = TensorDataset(x, y)
+        dataset = TensorDataset(x_train, y_train)
         loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
         for epoch in range(1, epochs + 1):
@@ -88,7 +90,7 @@ class SingleTaskTrainer:
                     self.optimizer.step()
 
                 # ==== Deep Ensemble ====
-                elif self.model.__class__.__name__ == 'DeepEnsembleNetwork':
+                elif self.model.__class__.__name__ == 'DeepEnsembleNet':
                     mse = 0.0
                     loss = 0.0
                     kl = torch.tensor(0.0, device=self.device)
@@ -102,8 +104,8 @@ class SingleTaskTrainer:
                             clip_grad_norm_(submodel.parameters(), 1.0)
                         subopt.step()
 
-                        loss += sub_loss.item() * x_batch.shape[0]
-                        mse += sub_loss.item() * x_batch.shape[0]
+                        loss += sub_loss.item() 
+                        mse += sub_loss.item()
 
                     loss /= len(self.model.models)
                     mse /= len(self.model.models)
@@ -128,9 +130,9 @@ class SingleTaskTrainer:
                 total_mse  += mse.item() * x_batch.shape[0]
                 total_kl   += kl.item() * x_batch.shape[0]
 
-            total_loss /= N
-            total_mse  /= N
-            total_kl   /= N
+            total_loss /= N_train
+            total_mse  /= N_train
+            total_kl   /= N_train
 
             self.losses.append(total_loss)
             self.mses.append(total_mse)
@@ -139,6 +141,14 @@ class SingleTaskTrainer:
 
             if epoch % print_every == 0:
                 print(f"[Epoch {epoch}] Loss: {total_loss:.4f} | MSE: {total_mse:.4f} | KL: {total_kl:.4f} | β: {beta:.2f}")
+
+            early_stop = self.early_stop(x_val, y_val)
+
+            if early_stop:
+                return
+
+    def early_stop(self, x_val, y_val):
+        pass                
 
     def evaluate(self, x, num_samples=30, sample=True):
         self.model.eval()
@@ -149,7 +159,7 @@ class SingleTaskTrainer:
         with torch.no_grad():
             if hasattr(self.model, 'forward') and ('return_kl' and 'sample' in self.model.forward.__code__.co_varnames):
                 y_pred = [self._model_forward(x=x, return_kl=False, sample=sample).squeeze(0).detach().cpu().numpy() for _ in range(num_samples)]
-            elif self.model.__class__.__name__ == 'DeepEnsembleNetwork':
+            elif self.model.__class__.__name__ == 'DeepEnsembleNet':
                 y_pred = self._model_forward(x=x)[0].squeeze(0).detach().cpu().numpy()
             else:
                 y_pred = self._model_forward(x=x)[0].squeeze(0).detach().cpu().numpy()
@@ -158,15 +168,6 @@ class SingleTaskTrainer:
         preds = np.stack(y_pred)  # shape: (num_samples, batch_size, output_dim)
 
         return preds
-    
-    # def _compute_beta(self, epoch, beta_param_dict):
-    #     beta_scheduler = beta_param_dict["beta_scheduler"]
-    #     if beta_scheduler == "zero":
-    #         return 0
-    #     elif beta_scheduler == "linear":
-    #         beta_max = beta_param_dict["beta_max"] 
-    #         warmup_epochs = beta_param_dict["warmup_epochs"]
-    #         return min(beta_max, epoch / warmup_epochs)
         
     def _compute_beta(self, epoch, beta_param_dict):
         """
@@ -207,18 +208,16 @@ class SingleTaskTrainer:
         else:
             raise ValueError(f"Unsupported beta scheduler: {beta_scheduler}")
 
-    # def plot_results(self, x_c, y_c, x_t, y_t, mean, std, desc=""):
-    #     plot_loss_curve(self.losses, self.mses, self.kls, self.betas, desc=desc)
-    #     plot_meta_task(x_c.cpu(), y_c.cpu(), x_t.cpu(), y_t.cpu(), mean, std, desc=desc)
+
 
 if __name__=='__main__':
 
-    from models.fdnet import LP_FDNetwork, IC_FDNetwork
-    from models.hypernet import HyperNetwork
-    from models.bayesnet import BayesNetwork
-    from models.gausshypernet import GaussianHyperNetwork
-    from models.mlpnet import DeterministicMLPNetwork
-    from models.deepensemblenet import DeepEnsembleNetwork
+    from models.fdnet import LP_FDNet, IC_FDNet
+    from models.hypernet import HyperNet
+    from models.bayesnet import BayesNet
+    from models.gausshypernet import GaussianHyperNet
+    from models.mlpnet import MLPNet
+    from models.deepensemblenet import DeepEnsembleNet
     from data.toy_functions import generate_meta_task
     
     # Parameters
@@ -228,32 +227,32 @@ if __name__=='__main__':
     print_every = 20
     sample = True
     seed = 10
-    model_type = 'IC_FDNet'
+    model_type = 'DeepEnsembleNet'
 
     if seed:
         torch.manual_seed(seed)
         np.random.seed(seed)
         random.seed(seed)
 
-    # One task: context + target
-    x_c, y_c, x_t, y_t, desc = generate_meta_task(n_context=10, n_target=100, seed=seed)
+    # Train and test data
+    x_train, y_train, x_val, y_val, x_test, y_test, desc = generate_meta_task(n_train=10, n_val=5, n_test=100, seed=seed)
     
     # Create model
     if model_type == 'LP_FDNet':
-        model = LP_FDNetwork(input_dim, hidden_dim, input_dim, hyper_hidden_dim=64)
+        model = LP_FDNet(input_dim, hidden_dim, input_dim, hyper_hidden_dim=64)
     elif model_type == 'IC_FDNet':
-        model = IC_FDNetwork(input_dim, hidden_dim, input_dim, hyper_hidden_dim=64)
+        model = IC_FDNet(input_dim, hidden_dim, input_dim, hyper_hidden_dim=64)
     elif model_type == 'HyperNet':
-        model = HyperNetwork(input_dim, hidden_dim, input_dim, hyper_hidden_dim=64)
+        model = HyperNet(input_dim, hidden_dim, input_dim, hyper_hidden_dim=64)
     elif model_type == 'BayesNet':
-        model = BayesNetwork(input_dim, hidden_dim, input_dim, prior_std=1.0)
+        model = BayesNet(input_dim, hidden_dim, input_dim, prior_std=1.0)
     elif model_type == 'GaussHyperNet':
-        model = GaussianHyperNetwork(input_dim, hidden_dim, input_dim, hyper_hidden_dim=64, latent_dim=10, prior_std=1.0)
+        model = GaussianHyperNet(input_dim, hidden_dim, input_dim, hyper_hidden_dim=64, latent_dim=10, prior_std=1.0)
     elif model_type == 'MLPNet':
-        model = DeterministicMLPNetwork(input_dim, hidden_dim, input_dim, dropout_rate=0.1)
+        model = MLPNet(input_dim, hidden_dim, input_dim, dropout_rate=0.1)
     elif model_type == 'DeepEnsembleNet':
-        model = DeepEnsembleNetwork(
-            network_class=DeterministicMLPNetwork,
+        model = DeepEnsembleNet(
+            network_class=MLPNet,
             num_models=5,
             seed_list=[0, 1, 2, 3, 4],
             input_dim=input_dim,
@@ -269,49 +268,6 @@ if __name__=='__main__':
     # Create training class instance
     trainer = SingleTaskTrainer(model)
     # Train
-    trainer.train(x=x_c, y=y_c)
+    trainer.train(x_train=x_train, y_train=y_train, x_val=x_val, y_val=y_val)
     # Evaluate
-    preds, mean, std = trainer.evaluate(x=x_t)
-    # Plot
-    trainer.plot_results(x_c=x_c, y_c=y_c, x_t=x_t, y_t=y_t, mean=mean, std=std, desc=desc)
-
-
-# OLD CODE ===================================================================================================
-
-    # def train(self, x, y, epochs=1000, warmup_epochs=500, beta_max=1.0, print_every=100):
-    #     x, y = x.to(self.device), y.to(self.device)
-    #     N = x.shape[0]
-    #     if N == 0:
-    #         raise ValueError("Empty context set provided.")
-
-    #     for epoch in range(1, epochs + 1):
-    #         self.model.train()
-    #         self.optimizer.zero_grad()
-    #         total_loss = None
-    #         total_kl = 0.0
-    #         total_mse = 0.0
-
-    #         for n in range(N):
-    #             x_n = x[n:n+1]
-    #             y_n = y[n:n+1]
-    #             y_predn, kl = self._model_forward(x_n)
-    #             mse = F.mse_loss(y_predn.squeeze(), y_n.squeeze())
-    #             beta = self._compute_beta(epoch, warmup_epochs, beta_max)
-
-    #             loss = (mse + beta * kl)/N
-    #             total_loss = loss if total_loss is None else total_loss + loss
-    #             total_kl += kl/N
-    #             total_mse += mse/N
-
-    #         total_loss.backward()
-    #         self.optimizer.step()
-
-    #         # Store for plotting
-    #         self.losses.append(total_loss.item())
-    #         self.mses.append(total_mse.detach().item())
-    #         self.kls.append(total_kl.detach().item())
-    #         self.betas.append(beta)
-
-    #         if epoch % print_every == 0:
-    #             print(f"[Epoch {epoch}] Loss: {total_loss:.4f} | MSE: {total_mse:.4f} | KL: {total_kl:.4f} | β: {beta:.2f}")
-
+    preds = trainer.evaluate(x=x_test)

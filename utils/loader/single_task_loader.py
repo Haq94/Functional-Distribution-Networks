@@ -48,7 +48,7 @@ class SingleTaskExperimentLoader:
         metrics = {}
         metric_names = [
             "mean", "var", "std", "residual_precision", "residual_accuracy",
-            "bias", "mse", "bias_var_diff", "nlpd"
+            "bias", "mse", "bias_var_diff", "nlpd_kde", "nlpd_hist", "pdf_kde", "pdf_hist", 'crps'
         ]
         for name in metric_names:
             path = os.path.join(self.analysis_path, f"{name}.npy")
@@ -157,7 +157,7 @@ def single_task_overlay_loader(seeds, date_times):
 
     metrics = {name: {} for name in [
         "mean", "var", "std", "res_precision", "res_accuracy",
-        "bias", "mse", "bias_var_diff", "nlpd"
+        "bias", "mse", "bias_var_diff", "nlpd_kde", "nlpd_hist", "crps"
     ]}
 
     losses = {name: {} for name in ["losses", "mses", "kls", "betas"]}
