@@ -30,9 +30,6 @@ class SingleTaskTrainer:
         else:
             self.optimizer = optimizer or torch.optim.Adam(self.model.parameters(), lr=lr)
 
-            
-
-
     def _model_forward(self, x, return_kl=True, sample=True):
         if hasattr(self.model, 'forward') and ('return_kl' and 'sample' in self.model.forward.__code__.co_varnames):
             return self.model(x, return_kl=return_kl, sample=sample)
@@ -140,15 +137,7 @@ class SingleTaskTrainer:
             self.betas.append(beta)
 
             if epoch % print_every == 0:
-                print(f"[Epoch {epoch}] Loss: {total_loss:.4f} | MSE: {total_mse:.4f} | KL: {total_kl:.4f} | β: {beta:.2f}")
-
-            early_stop = self.early_stop(x_val, y_val)
-
-            if early_stop:
-                return
-
-    def early_stop(self, x_val, y_val):
-        pass                
+                print(f"[Epoch {epoch}] Loss: {total_loss:.4f} | MSE: {total_mse:.4f} | KL: {total_kl:.4f} | β: {beta:.2f}")            
 
     def evaluate(self, x, num_samples=30, sample=True):
         self.model.eval()

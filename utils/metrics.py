@@ -43,15 +43,15 @@ def metrics(preds, y, eps=1e-6, nlpd_type='kde'):
     bias_var_diff = np.abs(mse - (var + bias**2))  # (n_points, 1)
 
     # Gaussian NLPD per sample (n_points,)
-    nlpd_kde = per_x_nlpd_from_samples_kde(samples=preds, y_true=y)
-    nlpd_hist = per_x_nlpd_from_samples_hist(samples=preds, y_true=y, bins=50, y_min=preds.min(), y_max=preds.max())
+    nlpd_kde = per_x_nlpd_from_samples_kde(preds=preds, y_true=y)
+    nlpd_hist = per_x_nlpd_from_samples_hist(preds=preds, y_true=y, bins=50, y_min=preds.min(), y_max=preds.max())
 
     # PDF (n_points, bins)
-    grid_kde, pdf_kde = per_x_pdf_kde(samples=preds, y_min=preds.min(), y_max=preds.max())
-    _, grid_hist, pdf_hist = per_x_pdf_hist(samples=preds,y_min=preds.min(), y_max=preds.max())
+    grid_kde, pdf_kde = per_x_pdf_kde(preds=preds, y_min=preds.min(), y_max=preds.max())
+    _, grid_hist, pdf_hist = per_x_pdf_hist(preds=preds,y_min=preds.min(), y_max=preds.max())
 
     # CRPS
-    crps = energy_score_from_samples_np(samples=preds, y_true=y)
+    crps = energy_score_from_samples(preds=preds, y_true=y)
 
     # Metric dict
 
@@ -75,13 +75,13 @@ def metrics(preds, y, eps=1e-6, nlpd_type='kde'):
 
     return metric_dict
 
-def energy_score_from_samples_np(samples, y_true, beta=1.0):
+def energy_score_from_samples(preds, y_true, beta=1.0):
     """
     Multivariate generalization of CRPS (beta=1 → CRPS in 1D with L2 norm).
 
     Args
     ----
-    samples : np.ndarray, shape (S, N, D) or (S, N)  (D>=1)
+    preds : np.ndarray, shape (S, N, D) or (S, N)  (D>=1)
     y_true  : np.ndarray, shape (N, D) or (N,)       (matches D)
     beta    : float in (0,2]
     reduction : 'mean' | 'none'
@@ -90,7 +90,7 @@ def energy_score_from_samples_np(samples, y_true, beta=1.0):
     -------
     es : float or np.ndarray (N,)
     """
-    s = np.asarray(samples)
+    s = np.asarray(preds)
     if s.ndim == 2:
         s = s[..., None]  # (S,N,1)
     S, N, D = s.shape
@@ -112,13 +112,13 @@ def energy_score_from_samples_np(samples, y_true, beta=1.0):
     es = term1 - 0.5 * term2                             # (N,)
     return es
 
-def per_x_pdf_kde(samples, M=200, y_min=None, y_max=None, min_band=1e-6):
+def per_x_pdf_kde(preds, M=200, y_min=None, y_max=None, min_band=1e-6):
     """
     KDE-based per-x PDF on a common grid.
-    samples: (S,N[,1]) predictive samples
+    preds: (S,N[,1]) predictive samples
     returns: grid (M,), pdf (N,M)
     """
-    s = np.asarray(np.squeeze(samples), dtype=np.float64)  # (S,N)
+    s = np.asarray(np.squeeze(preds), dtype=np.float64)  # (S,N)
     S, N = s.shape
     if y_min is None: y_min = float(s.min())
     if y_max is None: y_max = float(s.max())
@@ -137,13 +137,13 @@ def per_x_pdf_kde(samples, M=200, y_min=None, y_max=None, min_band=1e-6):
     return grid, pdf
 
 
-def per_x_pdf_hist(samples, bins=50, y_min=None, y_max=None, alpha=0.5):
+def per_x_pdf_hist(preds, bins=50, y_min=None, y_max=None, alpha=0.5):
     """
     Histogram-based per-x PDF (piecewise-constant).
-    samples: (S,N[,1])
+    preds: (S,N[,1])
     returns: edges (bins+1,), centers (bins,), pdf (N,bins)
     """
-    s = np.asarray(np.squeeze(samples), dtype=np.float64)  # (S,N)
+    s = np.asarray(np.squeeze(preds), dtype=np.float64)  # (S,N)
     S, N = s.shape
     if y_min is None: y_min = float(s.min())
     if y_max is None: y_max = float(s.max())
@@ -160,14 +160,14 @@ def per_x_pdf_hist(samples, bins=50, y_min=None, y_max=None, alpha=0.5):
     return edges, centers, pdf
 
 
-def per_x_nlpd_from_samples_kde(samples, y_true, min_band=1e-6):
+def per_x_nlpd_from_samples_kde(preds, y_true, min_band=1e-6):
     """
     KDE-based per-x NLPD.
-    samples: (S,N) torch/np — S predictive samples per x_i
+    preds: (S,N) torch/np — S predictive samples per x_i
     y_true : (N,) torch/np
     returns: (N,) array of -log p(y_i | KDE_i)
     """
-    s = np.asarray(np.squeeze(samples), dtype=np.float64)
+    s = np.asarray(np.squeeze(preds), dtype=np.float64)
     S, N = s.shape
     y = np.asarray(y_true,  dtype=np.float64)
 
@@ -184,17 +184,17 @@ def per_x_nlpd_from_samples_kde(samples, y_true, min_band=1e-6):
     return -log_p  # (N,)
 
 
-def per_x_nlpd_from_samples_hist(samples, y_true, bins=50, y_min=None, y_max=None,
+def per_x_nlpd_from_samples_hist(preds, y_true, bins=50, y_min=None, y_max=None,
                                  alpha=0.5, eps=1e-12):
     """
     Histogram-based per-x NLPD with Laplace/Jeffreys smoothing.
-    samples: (S,N) torch/np
+    preds: (S,N) torch/np
     y_true : (N,) torch/np
     alpha  : pseudo-count per bin (alpha=0.5 is Jeffreys; alpha=1 is Laplace)
     returns: (N,) array of -log p(y_i) where p is piecewise-constant histogram density.
     """
-    S, N, _ = samples.shape
-    s = np.asarray(samples, dtype=np.float64)
+    S, N, _ = preds.shape
+    s = np.asarray(preds, dtype=np.float64)
     y = np.asarray(y_true,  dtype=np.float64)
 
     # Global edges so bins are comparable across x (simple & consistent)

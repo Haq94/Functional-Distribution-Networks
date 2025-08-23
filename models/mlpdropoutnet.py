@@ -4,16 +4,13 @@ import torch.nn.functional as F
 class MLPDropoutNet(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim=1, dropout_rate=0.1):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim), 
-            nn.ReLU(), 
-            nn.Dropout(dropout_rate),
-            nn.Linear(hidden_dim, output_dim)
-        )
-    def forward(self, x, mc_dropout=False):
-        # Force dropout active if mc_dropout=True
-        if mc_dropout:
-            self.train()
-        else:
-            self.eval()
-        return self.net(x)
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, output_dim)
+        self.dropout_rate = dropout_rate
+
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        # explicitly call dropout with `training=True` so it's always active
+        x = F.dropout(x, p=self.dropout_rate, training=True)
+        x = self.fc2(x)
+        return x

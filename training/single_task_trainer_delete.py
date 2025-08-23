@@ -7,14 +7,31 @@ from tqdm.auto import tqdm
 import numpy as np
 import random
 
+from utils.metrics import per_x_nlpd_from_samples_kde, energy_score_from_samples
+# from utils.plots import plot_meta_task, plot_loss_curve
+# from utils.debug_tools import debug_requires_grad, get_param_and_grad_dict
+
 class SingleTaskTrainer:
-    def __init__(self, model, optimizer=None, lr=1e-3, device=None):
+    def __init__(self, model, optimizer=None, lr=1e-3, device=None, checkpoint_folder=None):
         self.model = model.double()
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
 
-        self.kl_models = {'IC_FDNet', 'LP_FDNet', 'BayesNet', 'GaussHyperNet'}
-        self.losses, self.mses, self.kls, self.betas = [], [], [], []
+        self.checkpoint_folder = checkpoint_folder
+        if checkpoint_folder != None:
+            self.path_log = {}
+
+        kl_models = {'IC_FDNet', 'LP_FDNet', 'BayesNet', 'GaussHyperNet'}
+        stoch_models = {'IC_FDNet', 'LP_FDNet', 'BayesNet', 'GaussHyperNet', 'DeepEnsembleNet', 'MLPDropoutNet'}
+        mc_model = {'IC_FDNet', 'LP_FDNet', 'BayesNet', 'GaussHyperNet', 'MLPDropoutNet'}
+        self.is_stoch = model.__class__.__name__ in stoch_models
+        self.kl_exist = model.__class__.__name__ in kl_models
+        self.training_type = 'MC' if model.__class__.__name__ in mc_model else 'Ensemble' if model.__class__.__name__ == 'DeepEnsembleNet' else 'Deterministic'
+
+        self.losses = []
+        self.mses = []
+        self.kls = []
+        self.betas = []
 
         # Handle optimizer(s)
         if model.__class__.__name__ == 'DeepEnsembleNet':
@@ -22,121 +39,50 @@ class SingleTaskTrainer:
                 torch.optim.Adam(submodel.parameters(), lr=lr)
                 for submodel in model.models
             ]
-            self.optimizer = None
+            self.optimizer = None  # Not used for ensembles
         else:
             self.optimizer = optimizer or torch.optim.Adam(self.model.parameters(), lr=lr)
 
-        # Early stop state
-        self._best_val_mse = np.inf
-        self._best_state = None
-        self._epochs_no_improve = 0
-
-    # ---------- utils ----------
-    def _model_has_args(self, *names):
-        if not hasattr(self.model, 'forward'):
-            return False
-        argnames = self.model.forward.__code__.co_varnames
-        return all(name in argnames for name in names)
-
     def _model_forward(self, x, return_kl=True, sample=True):
-        # Fix: check each arg separately (not ('return_kl' and 'sample' in ...))
-        if self._model_has_args('return_kl', 'sample'):
+        if hasattr(self.model, 'forward') and ('return_kl' and 'sample' in self.model.forward.__code__.co_varnames):
             return self.model(x, return_kl=return_kl, sample=sample)
         else:
-            return self.model(x), torch.tensor(0.0, device=x.device, dtype=torch.double)
+            return self.model(x), torch.tensor(0.0, device=x.device)
 
-    @torch.no_grad()
-    def _val_pass(self, x_val, y_val, beta=0.0, MC=1):
-        """
-        Returns: (val_loss, val_mse, val_kl) averaged over val set.
-        Uses MC for stochastic models; ensemble averages members.
-        """
-        if x_val is None or y_val is None:
-            return None
+    def train(self, x_train, y_train, epochs=1000, beta_param_dict=None, val_data=None,
+            print_every=100, batch_size=10, grad_clip=True, MC=1):
 
-        self.model.eval()
-        x_val = x_val.double().to(self.device)
-        y_val = y_val.double().to(self.device)
-        N = x_val.shape[0]
+        # Check if validation data exist
+        self.val_exist = True if  (x_val is not None and y_val is not None) else False
+        if self.val_exist and self.is_stoch:
+            self.x_val = val_data[0]; self.y_val = val_data[1]; self.MC_val = val_data[2]
+            self.val_metrics_set = {'crps', 'nlpd', 'var', 'mse', 'bias_sq'}
+            self.mse_val = []; self.bias_sq_val = []; self.crps_val = []; self.nlpd_val = []; self.var_val = []
+        elif self.val_exist:
+            self.x_val = val_data[0]; self.y_val = val_data[1]; self.MC_val = val_data[2]
+            self.val_metrics_set = {'mse'}
+            self.mse_val = []
+        # best_metric = 'mse' if (best_metric in ('nlpd', 'crps', 'var') and not is_stoch) else None if val_exist else best_metric
+        # save_best = True if (best_metric != None and val_exist) else False
 
-        if self.model.__class__.__name__ in self.kl_models and MC > 1:
-            mse_total, kl_total = 0.0, 0.0
-            for _ in range(MC):
-                y_pred, kl = self._model_forward(x_val, return_kl=True, sample=True)
-                mse = F.mse_loss(y_pred, y_val)
-                mse_total += mse.item()
-                kl_total  += kl.item()
-            mse = mse_total / MC
-            kl  = kl_total / MC
-        elif self.model.__class__.__name__ == 'DeepEnsembleNet':
-            # Average MSE across members (each member predicts deterministically)
-            mses = []
-            for submodel in self.model.models:
-                y_pred = submodel(x_val)
-                mses.append(F.mse_loss(y_pred, y_val).item())
-            mse = float(np.mean(mses))
-            kl = 0.0
-        else:
-            y_pred, kl_t = self._model_forward(x_val, return_kl=True, sample=True)
-            mse = F.mse_loss(y_pred, y_val).item()
-            kl = float(kl_t.item())
-
-        val_loss = mse + float(beta) * kl
-        return val_loss, mse, kl
-
-    def _maybe_checkpoint(self, path, extra=None):
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        payload = {
-            "model_state": self.model.state_dict(),
-            "model_class": self.model.__class__.__name__,
-            "losses": self.losses,
-            "mses": self.mses,
-            "kls": self.kls,
-            "betas": self.betas,
-            "extra": extra or {},
-        }
-        # For ensembles, saving the container state_dict captures members too
-        torch.save(payload, path)
-
-    # ---------- training ----------
-    def train(
-        self,
-        x_train, y_train,
-        epochs=1000,
-        beta_param_dict=None,
-        x_val=None, y_val=None,
-        print_every=100,
-        batch_size=10,
-        grad_clip=True,
-        MC=1,
-        # Early stop / checkpointing
-        patience=50,
-        min_delta=0.0,
-        restore_best_weights=True,
-        best_ckpt_path=None,          # e.g. "checkpoints/best.pt"
-        save_every=None,              # e.g. 100 to also save periodic checkpoints
-        periodic_ckpt_dir=None        # e.g. "checkpoints/epochs"
-    ):
         x_train, y_train = x_train.double().to(self.device), y_train.double().to(self.device)
         N_train = x_train.shape[0]
         if N_train == 0:
             raise ValueError("Empty context set provided.")
-
-        # Default beta schedule
+        
+        # If beta parameter dictionary is None then default to linear
         if beta_param_dict is None:
-            beta_param_dict = {
-                "beta_scheduler": "linear",
-                "warmup_epochs": round(epochs / 2),
-                "beta_max": 1.0
-            }
+            beta_scheduler = "linear"
+            # Warm up epochs
+            warmup_epochs = round(epochs/2)
+            # Beta max
+            beta_max = 1.0
+            # Beta parameter dictionary
+            beta_param_dict = {"beta_scheduler": beta_scheduler,
+                            "warmup_epochs": warmup_epochs, "beta_max": beta_max}
 
         dataset = TensorDataset(x_train, y_train)
         loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-
-        # Reset early stop state for this run
-        self._best_val_mse = np.inf
-        self._epochs_no_improve = 0
-        self._best_state = None
 
         for epoch in range(1, epochs + 1):
             self.model.train()
@@ -145,18 +91,19 @@ class SingleTaskTrainer:
             total_mse = 0.0
             beta = self._compute_beta(epoch, beta_param_dict)
 
-            for x_batch, y_batch in tqdm(loader, desc=f"Epoch {epoch}", leave=False):
+            for x_batch, y_batch in tqdm(loader, desc=f"Epoch {epoch}"):
                 x_batch, y_batch = x_batch.to(self.device), y_batch.to(self.device)
 
-                if self.model.__class__.__name__ in self.kl_models:
+                # ==== Monte Carlo stochastic models ====
+                if self.training_type == 'MC':
                     mse_total, kl_total = None, None
                     for _ in range(MC):
-                        y_pred, kl = self._model_forward(x_batch, return_kl=True, sample=True)
+                        y_pred, kl = self._model_forward(x_batch)
                         mse = F.mse_loss(y_pred, y_batch)
                         mse_total = mse if mse_total is None else mse_total + mse
-                        kl_total  = kl  if kl_total  is None else kl_total  + kl
+                        kl_total = kl if kl_total is None else kl_total + kl
                     mse = mse_total / MC
-                    kl  = kl_total  / MC
+                    kl = kl_total / MC
                     loss = mse + beta * kl
 
                     self.optimizer.zero_grad()
@@ -165,9 +112,13 @@ class SingleTaskTrainer:
                         clip_grad_norm_(self.model.parameters(), 1.0)
                     self.optimizer.step()
 
-                elif self.model.__class__.__name__ == 'DeepEnsembleNet':
-                    mse_accum = 0.0
-                    for submodel, subopt in zip(self.model.models, self.optimizers):
+                # ==== Deep Ensemble ====
+                elif self.training_type == 'Ensemble':
+                    mse = 0.0
+                    loss = 0.0
+                    kl = torch.tensor(0.0, device=self.device)
+
+                    for i, (submodel, subopt) in enumerate(zip(self.model.models, self.optimizers)):
                         subopt.zero_grad()
                         y_pred_i = submodel(x_batch)
                         sub_loss = F.mse_loss(y_pred_i, y_batch)
@@ -175,30 +126,33 @@ class SingleTaskTrainer:
                         if grad_clip:
                             clip_grad_norm_(submodel.parameters(), 1.0)
                         subopt.step()
-                        mse_accum += sub_loss.item()
 
-                    mse = torch.tensor(mse_accum / len(self.model.models), device=self.device, dtype=torch.double)
-                    kl  = torch.tensor(0.0, device=self.device, dtype=torch.double)
-                    loss = mse  # no KL for ensemble members
+                        loss += sub_loss.item() 
+                        mse += sub_loss.item()
 
+                    loss /= len(self.model.models)
+                    mse /= len(self.model.models)
+
+                    loss = torch.tensor(loss, device=self.device)
+                    mse  = torch.tensor(mse, device=self.device)
+
+                # ==== Deterministic model ====
                 else:
-                    y_pred, kl = self._model_forward(x_batch, return_kl=True, sample=True)
+                    y_pred, kl = self._model_forward(x_batch)
                     mse = F.mse_loss(y_pred, y_batch)
                     loss = mse + beta * kl
 
                     self.optimizer.zero_grad()
                     loss.backward()
                     if grad_clip:
-                        clip_grad_norm_((self.model.parameters()), 1.0)
+                        clip_grad_norm_(self.model.parameters(), 1.0)
                     self.optimizer.step()
 
-                # Accumulate stats (scale by batch size for epoch mean)
-                bs = x_batch.shape[0]
-                total_loss += loss.item() * bs
-                total_mse  += mse.item()  * bs
-                total_kl   += kl.item()   * bs
+                # Accumulate stats
+                total_loss += loss.item() * x_batch.shape[0]
+                total_mse  += mse.item() * x_batch.shape[0]
+                total_kl   += kl.item() * x_batch.shape[0]
 
-            # Normalize
             total_loss /= N_train
             total_mse  /= N_train
             total_kl   /= N_train
@@ -208,104 +162,197 @@ class SingleTaskTrainer:
             self.kls.append(total_kl)
             self.betas.append(beta)
 
-            # Periodic checkpoint (optional)
-            if save_every is not None and periodic_ckpt_dir is not None and (epoch % save_every == 0):
-                path = os.path.join(periodic_ckpt_dir, f"epoch_{epoch}.pt")
-                self._maybe_checkpoint(path, extra={"epoch": epoch})
+            # Save checkpoints
+            if self.checkpoint_folder != None:
+                self._save_checkpoint(epoch)
+            
+            # Calculate validation metrics
+            self.val_exist and self.val_metrics()
 
-            # Validation + early stop
-            if x_val is not None and y_val is not None:
-                val_stats = self._val_pass(x_val, y_val, beta=beta, MC=max(MC, 10))
-                if val_stats is not None:
-                    val_loss, val_mse, val_kl = val_stats
+            if epoch % print_every == 0:
+                print(f"[Epoch {epoch}] Loss: {total_loss:.4f} | MSE: {total_mse:.4f} | KL: {total_kl:.4f} | β: {beta:.2f}")            
+        
+        self.model_epoch = epoch
+        if self.val_metrics:
+            for metric in self.val_metrics_set:
+                if metric == 'mse':
+                    self.mse_val = np.stack(self.mse_val)
+                elif metric == 'bias_sq':
+                    self.bias_sq_val = np.stack(self.bias_sq_val)
+                elif metric == 'var':
+                    self.var_val = np.stack(self.var_val)
+                elif metric == 'nlpd':
+                    self.nlpd_val = np.stack(self.nlpd_val)
+                elif metric == 'crps':
+                    self.crps_val = np.stack(self.crps_val)
+                    
+    def val_metrics(self):
+        x_val = self.x_val
+        y_val = self.y_val.cpu().numpy().squeeze().astype(np.float64) # (batch_size,)
+        MC_val = self.MC_val
+        val_metrics_set = self.val_metrics_set
 
-                    improved = (self._best_val_mse - val_mse) > float(min_delta)
-                    if improved:
-                        self._best_val_mse = val_mse
-                        self._epochs_no_improve = 0
-                        # Save the absolute best state
-                        self._best_state = {
-                            "model_state": {k: v.detach().clone() for k, v in self.model.state_dict().items()},
-                            "epoch": epoch,
-                            "val_mse": val_mse
-                        }
-                        if best_ckpt_path is not None:
-                            self._maybe_checkpoint(best_ckpt_path, extra={"epoch": epoch, "val_mse": val_mse})
-                    else:
-                        self._epochs_no_improve += 1
+        preds = self.evaluate(x_val, num_samples=MC_val).astype(np.float64) # shape: (num_samples, batch_size, output_dim)
 
-                    if epoch % print_every == 0:
-                        print(f"[Epoch {epoch}] TrainLoss {total_loss:.4f} | TrainMSE {total_mse:.4f} | KL {total_kl:.4f} | β {beta:.3f} || ValMSE {val_mse:.4f}")
+        for metric in val_metrics_set:
+            metric == 'mse' and self.mse_val.append((((preds.squeeze().T - y_val.reshape(-1, 1))** 2).mean(1).reshape(-1, 1)).squeeze())
+            metric == 'bias_sq' and self.bias_sq_val.append(((preds.mean(0) - y_val.reshape(-1, 1))**2).squeeze())
+            metric == 'var' and self.var_val.append((preds.var(0)).squeeze())
+            metric == 'nlpd' and self.nlpd_val.append(per_x_nlpd_from_samples_kde(preds=preds, y_true=y_val).squeeze())
+            metric == 'crps' and self.crps_val.append(energy_score_from_samples(preds=preds, y_true=y_val).squeeze())
 
-                    if self._epochs_no_improve >= patience:
-                        if restore_best_weights and self._best_state is not None:
-                            self.model.load_state_dict(self._best_state["model_state"])
-                        return  # stop training early
-            else:
-                if epoch % print_every == 0:
-                    print(f"[Epoch {epoch}] Loss {total_loss:.4f} | MSE {total_mse:.4f} | KL {total_kl:.4f} | β {beta:.3f}")
+    def _save_checkpoint(self, epoch):
+        # where to write checkpoints
+        chkpt_root = getattr(self, "exp_dir", "checkpoints")         # you can set self.exp_dir externally
+        model_name = self.model.__class__.__name__
+        chkpt_dir = os.path.join(self.checkpoint_folder, chkpt_root, model_name)
+        os.makedirs(chkpt_dir, exist_ok=True)
 
-        # Finished all epochs; restore best if requested and available
-        if x_val is not None and y_val is not None and restore_best_weights and self._best_state is not None:
-            self.model.load_state_dict(self._best_state["model_state"])
+        # handle ensembles vs single models
+        if model_name == "DeepEnsembleNet":
+            state_dict = [m.state_dict() for m in self.model.models]
+            # opt_state  = [opt.state_dict() for opt in self.optimizers]
+        else:
+            state_dict = self.model.state_dict()
+            # opt_state  = self.optimizer.state_dict() if self.optimizer is not None else None
 
-    # kept same API
-    def early_stop(self, x_val, y_val):
-        # No-op: early stopping is integrated into train() above.
-        return False
+        payload = {
+            "epoch": epoch,
+            "model_class": model_name,
+            "state_dict": state_dict,
+            # "optimizer_state": opt_state
+        }
 
-    @torch.no_grad()
+        path = os.path.join(chkpt_dir, f"epoch_{epoch:04d}.pt")
+        torch.save(payload, path)
+        # # keep a rolling "latest.pt" for convenience
+        # torch.save(payload, os.path.join(ckpt_dir, "latest.pt"))
+
+        # Log path for loading
+        self.path_log[epoch] = path
+
     def evaluate(self, x, num_samples=30, sample=True):
         self.model.eval()
         x = x.double().to(self.device)
         N = x.shape[0]
         preds = []
 
-        if hasattr(self.model, 'forward') and ('return_kl' and 'sample' in self.model.forward.__code__.co_varnames):
-            y_pred = [self._model_forward(x=x, return_kl=False, sample=sample).squeeze(0).detach().cpu().numpy() for _ in range(num_samples)]
-        elif self.model.__class__.__name__ == 'DeepEnsembleNet':
-            y_pred = self._model_forward(x=x)[0].squeeze(0).detach().cpu().numpy()
-        else:
-            y_pred = self._model_forward(x=x)[0].squeeze(0).detach().cpu().numpy()
-            y_pred = [y_pred for _ in range(num_samples)]
+        with torch.no_grad():
+            if self.training_type == 'MC' and self.kl_exist:
+                y_pred = [self._model_forward(x=x, return_kl=False, sample=sample).squeeze(0).detach().cpu().numpy() for _ in range(num_samples)]
+            elif self.training_type == 'Ensemble':
+                y_pred = self._model_forward(x=x)[0].squeeze(0).detach().cpu().numpy()
+            elif self.training_type == 'MC' and not self.kl_exist:
+                y_pred = [self._model_forward(x=x, sample=sample)[0].squeeze(0).detach().cpu().numpy() for _ in range(num_samples)]
+            else:
+                y_pred = self._model_forward(x=x)[0].squeeze(0).detach().cpu().numpy()
+                y_pred = [y_pred for _ in range(num_samples)]
 
         preds = np.stack(y_pred)  # shape: (num_samples, batch_size, output_dim)
 
         return preds
-
+        
     def _compute_beta(self, epoch, beta_param_dict):
+        """
+        Compute the beta value at a given epoch based on the beta scheduling strategy.
+
+        Args:
+            epoch (int): Current epoch
+            beta_param_dict (dict): Dictionary containing:
+                - beta_scheduler: str, one of ['zero', 'constant', 'linear', 'cosine', 'sigmoid']
+                - beta_max: float
+                - warmup_epochs: int
+
+        Returns:
+            float: Beta value for this epoch
+        """
         beta_scheduler = beta_param_dict["beta_scheduler"]
-        beta_max = float(beta_param_dict["beta_max"])
-        warmup_epochs = int(beta_param_dict["warmup_epochs"])
+        beta_max = beta_param_dict["beta_max"]
+        warmup_epochs = beta_param_dict["warmup_epochs"]
 
         if beta_scheduler == "constant":
             return beta_max
 
-        progress = min(epoch / max(warmup_epochs, 1), 1.0)
+        progress = min(epoch / warmup_epochs, 1.0)
 
         if beta_scheduler == "linear":
             return beta_max * progress
+
         elif beta_scheduler == "cosine":
             return beta_max * (1 - np.cos(np.pi * progress)) / 2
+
         elif beta_scheduler == "sigmoid":
-            slope = 12
+            slope = 12  # Adjust for steepness
             midpoint = 0.5
             sigmoid_val = 1 / (1 + np.exp(-slope * (progress - midpoint)))
-            sigmoid_norm = sigmoid_val / (1 / (1 + np.exp(-slope * (1 - midpoint))))
+            sigmoid_norm = sigmoid_val / (1 / (1 + np.exp(-slope * (1 - midpoint))))  # normalize to hit beta_max
             return beta_max * sigmoid_norm
-        elif beta_scheduler == "zero":
-            return 0.0
+
         else:
             raise ValueError(f"Unsupported beta scheduler: {beta_scheduler}")
 
+    def load_epoch_from_log(self, epoch, map_location=None, strict=True, eval_mode=True):
+        """
+        Reload the model weights for a specific epoch using the saved path in the log dict.
+        Returns the loaded checkpoint dict.
+        """
 
+        # accept int 12 or string "epoch_12"
+        key_str = f"epoch_{int(epoch)}"
+        path_log = self.path_log
+        if not path_log:
+            raise ValueError("No path log found (expected self.path_log or self.log_path).")
+
+        # try exact matches in order of preference
+        path = None
+        if key_str in path_log:
+            path = path_log[key_str]
+        elif isinstance(epoch, int) and epoch in path_log:
+            path = path_log[epoch]
+        else:
+            # some users store with zero-padded keys
+            key_pad = f"epoch_{int(epoch):04d}"
+            if key_pad in path_log:
+                path = path_log[key_pad]
+
+        if path is None:
+            raise KeyError(f"No checkpoint path recorded for epoch {epoch}.")
+
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"Recorded checkpoint path does not exist: {path}")
+
+        # load checkpoint
+        ckpt = torch.load(path, map_location=map_location or self.device)
+        state = ckpt.get("state_dict", None)
+        if state is None:
+            raise KeyError(f"'state_dict' missing in checkpoint: {path}")
+
+        # handle ensemble vs single model (mirrors your _save_checkpoint)
+        model_name = self.model.__class__.__name__
+        if model_name == "DeepEnsembleNet":
+            if not isinstance(state, (list, tuple)) or len(state) != len(self.model.models):
+                raise ValueError("Ensemble state_dict format/size mismatch.")
+            for subm, sd in zip(self.model.models, state):
+                subm.load_state_dict(sd, strict=strict)
+        else:
+            self.model.load_state_dict(state, strict=strict)
+
+        self.model.to(self.device)
+        if eval_mode:
+            self.model.eval()
+
+        # keep a note
+        self.model_epoch = ckpt.get("epoch", int(epoch))
+        return ckpt
 
 if __name__=='__main__':
+
     from models.fdnet import LP_FDNet, IC_FDNet
     from models.hypernet import HyperNet
     from models.bayesnet import BayesNet
     from models.gausshypernet import GaussianHyperNet
     from models.mlpnet import MLPNet
+    from models.mlpdropoutnet import MLPDropoutNet
     from models.deepensemblenet import DeepEnsembleNet
     from data.toy_functions import generate_meta_task
     
@@ -316,7 +363,8 @@ if __name__=='__main__':
     print_every = 20
     sample = True
     seed = 10
-    model_type = 'DeepEnsembleNet'
+    model_type = 'LP_FDNet'
+    MC_val = 100
 
     if seed:
         torch.manual_seed(seed)
@@ -324,7 +372,7 @@ if __name__=='__main__':
         random.seed(seed)
 
     # Train and test data
-    x_train, y_train, x_val, y_val, x_test, y_test, desc = generate_meta_task(n_train=10, n_val=5, n_test=100, seed=seed)
+    x_train, y_train, x_val, y_val, x_test, y_test, desc = generate_meta_task(n_train=20, n_val=7, n_test=100, seed=seed)
     
     # Create model
     if model_type == 'LP_FDNet':
@@ -339,6 +387,8 @@ if __name__=='__main__':
         model = GaussianHyperNet(input_dim, hidden_dim, input_dim, hyper_hidden_dim=64, latent_dim=10, prior_std=1.0)
     elif model_type == 'MLPNet':
         model = MLPNet(input_dim, hidden_dim, input_dim, dropout_rate=0.1)
+    elif model_type == 'MLPDropoutNet':
+        model = MLPDropoutNet(input_dim, hidden_dim, input_dim, dropout_rate=0.1)
     elif model_type == 'DeepEnsembleNet':
         model = DeepEnsembleNet(
             network_class=MLPNet,
@@ -353,27 +403,18 @@ if __name__=='__main__':
         raise ValueError(f"Unknown model type: {model_type}")
     
     print('Running', type(model).__name__, '======================================================================')
-    
+
     # Create training class instance
-    trainer = SingleTaskTrainer(model)
+    trainer = SingleTaskTrainer(model, checkpoint_folder='results\\trainer_test')
     # Train
-    trainer.train(
-    x_train, y_train,
-    epochs=1000,
-    beta_param_dict={"beta_scheduler":"linear","warmup_epochs":500,"beta_max":1.0},
-    x_val=x_val, y_val=y_val,
-    print_every=50,
-    batch_size=32,
-    MC=4,                          # MC for stochastic models (train & val)
-    patience=100,                  # early stop patience
-    min_delta=0.0,                 # require this much improvement
-    restore_best_weights=True,     # load best at the end
-    best_ckpt_path="checkpoints/best.pt",
-    save_every=200,
-    periodic_ckpt_dir="checkpoints/periodic"
-)
+    trainer.train(x_train=x_train, y_train=y_train, val_data=(x_val, y_val, MC_val))
     # Evaluate
     preds = trainer.evaluate(x=x_test)
+    # Load an epoch
+    epoch_load = epochs//2    
+    trainer.load_epoch_from_log(epoch=epoch_load)
+    # Evaluate loaded model
+    preds_load = trainer.evaluate(x=x_test)
 
-
+    print('Single Task Trainer Regression Test Complete')
 
