@@ -83,8 +83,8 @@ class SingleTaskExperiment:
                         data=data,
                         epochs=epochs_to_use,
                         beta_param_dict=beta_param_dict,
-                        num_samples=num_samples,
-                        MC = MC
+                        MC_test=num_samples,
+                        MC_train = MC
                         )
 
                 if analysis:    

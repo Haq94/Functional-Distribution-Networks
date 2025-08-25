@@ -104,9 +104,6 @@ def get_seed_time_pairs_for_models(runs, model_type_list):
                 result.append(pair)
     return result
 
-def count_params(model):
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
 def set_determinism(seed: int = 0, cuda: bool = True):
     import os, random, numpy as np, torch
     random.seed(seed)
@@ -121,6 +118,23 @@ def set_determinism(seed: int = 0, cuda: bool = True):
         torch.use_deterministic_algorithms(True, warn_only=True)
         # Optional: hash determinism for some libs
         os.environ.setdefault("PYTHONHASHSEED", str(seed))
+
+def count_parameters(model, trainable_only=True):
+    """
+    Count the number of parameters in a PyTorch model.
+    
+    Args:
+        model (nn.Module): the model
+        trainable_only (bool): if True, count only parameters with requires_grad=True
+
+    Returns:
+        int: number of parameters
+    """
+    if trainable_only:
+        return sum(p.numel() for p in model.parameters() if p.requires_grad)
+    else:
+        return sum(p.numel() for p in model.parameters())
+
 
 
 

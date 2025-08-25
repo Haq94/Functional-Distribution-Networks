@@ -95,8 +95,8 @@ class FixedModelBetaSchedulerExperiment:
                                     data=data,
                                     epochs=epochs,
                                     beta_param_dict=beta_param_dict,
-                                    num_samples=num_samples,
-                                    MC = MC
+                                    MC_test=num_samples,
+                                    MC_train = MC
                                     )
                             
                             mean, var, std, res_prec, res_acc, bias, mse, bias_var_diff, nll = metric_outputs

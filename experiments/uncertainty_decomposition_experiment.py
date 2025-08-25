@@ -84,7 +84,7 @@ class Experiments:
                 training_time = time.time() - start_time
 
                 # Evaluate
-                preds = trainer.evaluate(x=x_test, num_samples=num_samples)
+                preds = trainer.evaluate(x=x_test, MC=num_samples)
 
                 # Metrics
                 metric_outputs = metrics(preds, y_test, eps=1e-6)

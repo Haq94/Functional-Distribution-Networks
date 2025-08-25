@@ -24,15 +24,17 @@ def load_pickle_plot(pickle_path, show=True):
     return fig
 
 def load_toy_task_regression(seed=0):
-    x_c, y_c, x_t, y_t, desc = generate_meta_task(seed=seed)
+    x_train, y_train, x_val, y_val, x_test, y_test, desc = generate_meta_task(seed=seed)
 
     # Convert to float64 explicitly
-    x_c = x_c.double()
-    y_c = y_c.double()
-    x_t = x_t.double()
-    y_t = y_t.double()
+    x_train = x_train.double()
+    y_train = y_train.double()
+    x_val = x_val.double()
+    y_val = y_val.double()
+    x_test = x_test.double()
+    y_test = y_test.double()
 
-    return x_c, y_c, x_t, y_t, {"description": desc}
+    return x_train, y_train, x_val, y_val, x_test, y_test, {"description": desc}
 
 if __name__ == '__main__':
     # Imports
