@@ -12,6 +12,7 @@ from utils.saver.single_task_saver import single_task_saver
 from utils.metrics import get_summary
 from utils.plots.single_task_plots import single_task_plots, plot_single_task_overlay
 from utils.loader.single_task_loader import single_task_overlay_loader
+from utils.general import set_determinism
 
 class SingleTaskExperiment:
     def __init__(self, model_type=None, seeds=None, hidden_dim=32, hyper_hidden_dim=64):
@@ -20,9 +21,16 @@ class SingleTaskExperiment:
         self.hidden_dim = hidden_dim
         self.hyper_hidden_dim = hyper_hidden_dim
 
-        self.kl_models = {'IC_FDNet', 'LP_FDNet', 'BayesNet', 'GaussHyperNet'}
-        self.non_kl_models = {'MLPNet', 'DeepEnsembleNet', 'HyperNet'}
-        self.no_variance_models = {'MLPNet', 'HyperNet'}
+        # self.kl_models = {'IC_FDNet', 'LP_FDNet', 'BayesNet', 'GaussHyperNet'}
+        # self.non_kl_models = {'MLPNet', 'DeepEnsembleNet', 'HyperNet'}
+        # self.no_variance_models = {'MLPNet', 'HyperNet'}
+
+        kl_models = {'IC_FDNet', 'LP_FDNet', 'BayesNet', 'GaussHyperNet'}
+        stoch_models = {'IC_FDNet', 'LP_FDNet', 'BayesNet', 'GaussHyperNet', 'DeepEnsembleNet', 'MLPDropoutNet'}
+        mc_model = {'IC_FDNet', 'LP_FDNet', 'BayesNet', 'GaussHyperNet', 'MLPDropoutNet'}
+        self.is_stoch = [m in stoch_models for m in self.model_types]
+        self.kl_exist = [m in kl_models for m in self.model_types]
+        self.training_type = ['MC' if m in mc_model else 'Ensemble' if m == 'DeepEnsembleNet' else 'Deterministic' for m in self.model_types]
 
     def run_experiments(self, x=np.linspace(start=-10,stop=10,num=500),
                             region_interp=(-1,1),
@@ -49,8 +57,9 @@ class SingleTaskExperiment:
 
         for seed in tqdm(seeds, leave=False):
             # Set seed
-            torch.manual_seed(seed)
-            np.random.seed(seed)
+            set_determinism(seed=seed)
+            # torch.manual_seed(seed)
+            # np.random.seed(seed)
             # Generate function
             f, desc = sample_function(seed=seed)
             # Training data
@@ -177,15 +186,31 @@ if __name__ == "__main__":
     input_seed = random.randint(100,10000)
     x_min = -3
     x_max = 3
-    n_interp = 15
+    n_interp = 20
     n_extrap = 40
     x = generate_grid(input_type=input_type, input_seed=input_seed, x_min=x_min, x_max=x_max, region_interp=region_interp, n_interp=n_interp, n_extrap=n_extrap)
-    # Fraction of points of data points in region used for training
+    # Fraction of training points (relative to number of interpolation points)
     frac_train = 0.5
+    # Fraction of validation points
+    frac_val = 0.2
+    # Stochastic checkpoint dict
+    stoch_checkpoint_dict = {
+    'metric_str': 'var',
+    'region_interp': region_interp,
+    'min_or_max': 'max',
+    'interp_or_extrap': 'extrap'
+    }
+    # Deterministic checkpoint dict
+    checkpoint_dict = {
+    'metric_str': 'mse',
+    'region_interp': region_interp,
+    'min_or_max': 'min',
+    'interp_or_extrap': 'interp'
+    }
     # Create experiment class instance
-    exp_class = SingleTaskExperiment(model_type=model_type, seeds=seeds)
+    exp_inst = SingleTaskExperiment(model_type=model_type, seeds=seeds)
     # Run experiment
-    exp_class.run_experiments(x=x, region_interp=region_interp, frac_train=frac_train,
+    exp_inst.run_experiments(x=x, region_interp=region_interp, frac_train=frac_train,
                                 epochs=epochs, beta_param_dict=beta_param_dict,
                                     num_samples=num_samples, MC=MC, num_models=num_models,
                                     analysis=analysis, save_switch=save_switch, ensemble_switch=ensemble_switch

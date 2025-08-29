@@ -52,9 +52,9 @@ class BaseExperiment:
         kl_models = {'IC_FDNet', 'LP_FDNet', 'BayesNet', 'GaussHyperNet'}
         stoch_models = {'IC_FDNet', 'LP_FDNet', 'BayesNet', 'GaussHyperNet', 'DeepEnsembleNet', 'MLPDropoutNet'}
         mc_model = {'IC_FDNet', 'LP_FDNet', 'BayesNet', 'GaussHyperNet', 'MLPDropoutNet'}
-        self.is_stoch = model_type in stoch_models
-        self.kl_exist = model_type in kl_models
-        self.training_type = 'MC' if model_type in mc_model else 'Ensemble' if model_type == 'DeepEnsembleNet' else 'Deterministic'
+        self.is_stoch = self.model_type in stoch_models
+        self.kl_exist = self.model_type in kl_models
+        self.training_type = 'MC' if self.model_type in mc_model else 'Ensemble' if self.model_type == 'DeepEnsembleNet' else 'Deterministic'
 
 # class BaseExperiment:
 #     def __init__(self, model_type, seed=0, hidden_dim=32, hyper_hidden_dim=64, num_models=5, device=None):
@@ -337,7 +337,7 @@ if __name__ == "__main__":
     # Data loader
     data_loader_fn = load_toy_task_regression 
     # Training parameters
-    epochs = 5
+    epochs = 6
     MC_train = 1
     # Validation parameters
     MC_val = 100
