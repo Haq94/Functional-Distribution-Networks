@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from utils.kl_divergence import compute_kl_divergence
 
-class GaussianHyperLayer(nn.Module):
+class GaussHyperLayer(nn.Module):
     def __init__(self, input_dim, output_dim, hyper_hidden_dim, latent_dim=10, prior_std=1.0):
         super().__init__()
         self.input_dim = input_dim
@@ -50,11 +50,11 @@ class GaussianHyperLayer(nn.Module):
         else:
             return out
 
-class GaussianHyperNet(nn.Module):
+class GaussHyperNet(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, hyper_hidden_dim, latent_dim=10, prior_std=1.0):
         super().__init__()
-        self.layer1 = GaussianHyperLayer(input_dim, hidden_dim, hyper_hidden_dim, latent_dim, prior_std)
-        self.layer2 = GaussianHyperLayer(hidden_dim, output_dim, hyper_hidden_dim, latent_dim, prior_std)
+        self.layer1 = GaussHyperLayer(input_dim, hidden_dim, hyper_hidden_dim, latent_dim, prior_std)
+        self.layer2 = GaussHyperLayer(hidden_dim, output_dim, hyper_hidden_dim, latent_dim, prior_std)
 
     def forward(self, x, return_kl=False, sample=True):
         x, kl1 = self.layer1(x, return_kl=return_kl, sample=sample) if return_kl else (self.layer1(x, sample=sample), 0.0)

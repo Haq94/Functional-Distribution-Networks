@@ -1,0 +1,37 @@
+# ===== ICLR Paper-Ready Matplotlib Style =====
+# Save this as iclr.mplstyle and load with plt.style.use("iclr.mplstyle")
+
+# Fonts
+font.family        : serif
+font.serif         : Times New Roman, Times, DejaVu Serif, Computer Modern Roman
+font.size          : 8       # matches two-column paper text
+
+# Axes
+axes.labelsize     : 8
+axes.titlesize     : 8
+axes.linewidth     : 0.8
+
+# Ticks
+xtick.labelsize    : 7
+ytick.labelsize    : 7
+xtick.direction    : in
+ytick.direction    : in
+xtick.major.size   : 3
+ytick.major.size   : 3
+
+# Lines & markers
+lines.linewidth    : 1.0
+lines.markersize   : 4
+
+# Legend
+legend.fontsize    : 7
+legend.frameon     : False
+legend.handlelength: 2.0
+
+# Save settings
+savefig.dpi        : 300
+savefig.format     : pdf
+savefig.bbox       : tight
+
+# Grid (subtle, optional)
+axes.grid          : False

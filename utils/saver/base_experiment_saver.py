@@ -50,7 +50,7 @@ def base_experiment_saver(model,
              y_test=y_test.cpu().numpy())
 
     # === Save metrics ===
-    save_analysis_arrays(metric_outputs, save_path)
+    save_analysis_arrays(metric_outputs, os.path.join(save_path, "analysis"))
     # with open(os.path.join(save_dir, "metrics.json"), "w") as f:
     #     json.dump(safe_metrics, f, indent=4)
 

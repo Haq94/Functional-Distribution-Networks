@@ -1,0 +1,22 @@
+{
+    "desc": "quad (a=-0.38, b=0.54)",
+    "model": "LP_FDNet",
+    "seed": 9432,
+    "rmse": 2.079704521353215,
+    "mean_nlpd": 2.9629682376442346,
+    "training_time": 0.30239200592041016,
+    "timestamp": "2025-08-30T04:35:24.139298",
+    "epochs": 3,
+    "beta_param_dict": {
+        "beta_scheduler": "linear",
+        "warmup_epochs": 2,
+        "beta_max": 1.0
+    },
+    "x_min": -3.0,
+    "x_max": 3.0,
+    "region_interp": [
+        -1,
+        1
+    ],
+    "frac_train": 0.5
+}

@@ -54,19 +54,7 @@ class BaseExperiment:
         mc_model = {'IC_FDNet', 'LP_FDNet', 'BayesNet', 'GaussHyperNet', 'MLPDropoutNet'}
         self.is_stoch = self.model_type in stoch_models
         self.kl_exist = self.model_type in kl_models
-        self.training_type = 'MC' if self.model_type in mc_model else 'Ensemble' if self.model_type == 'DeepEnsembleNet' else 'Deterministic'
-
-# class BaseExperiment:
-#     def __init__(self, model_type, seed=0, hidden_dim=32, hyper_hidden_dim=64, num_models=5, device=None):
-#         self.model_type = model_type
-#         self.seed = seed
-#         self.hidden_dim = hidden_dim
-#         self.hyper_hidden_dim = hyper_hidden_dim
-#         self.num_models = num_models
-#         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-#         # self.kl_models = {'IC_FDNet', 'LP_FDNet', 'BayesNet', 'GaussHyperNet'}
-#         # self.no_variance_models = {'MLPNet', 'HyperNet'}    
+        self.training_type = 'MC' if self.model_type in mc_model else 'Ensemble' if self.model_type == 'DeepEnsembleNet' else 'Deterministic'  
 
     def run_experiments(self,
                         data_loader_fn=None,
@@ -103,15 +91,16 @@ class BaseExperiment:
 
         # === Load data ===
         if data_loader_fn is None:
-            x_train, y_train, x_val, y_val, x_test, y_test, metadata = data
+            x_train, y_train, x_val, y_val, x_test, y_test, desc = data
+            metadata = {'description': desc}
         else:
-            x_train, y_train, x_val, y_val, x_test, y_test, desc = data_loader_fn(seed=seed)
-            data = {
-                     "x_train": x_train, "y_train": y_train,
-                     "x_test": x_test  , "y_test" : y_test,
-                     "x_val" : x_val   , "y_val"  : y_val,
-                     "metadata": desc
-                    }
+            x_train, y_train, x_val, y_val, x_test, y_test, metadata = data_loader_fn(seed=seed)
+        data = {
+                    "x_train": x_train, "y_train": y_train,
+                    "x_test": x_test  , "y_test" : y_test,
+                    "x_val" : x_val   , "y_val"  : y_val,
+                    "metadata": metadata
+                }
         val_data = (x_val, y_val, MC_val)
             
         # === Store data on device ===
@@ -293,9 +282,9 @@ class BaseExperiment:
             from models.bayesnet import BayesNet
             return BayesNet(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=output_dim)
         elif model_type == 'GaussHyperNet':
-            from models.gausshypernet import GaussianHyperNet
+            from models.gausshypernet import GaussHyperNet
             latent_dim = getattr(self, 'latent_dim', 10)
-            return GaussianHyperNet(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=output_dim, hyper_hidden_dim=hyper_hidden_dim, latent_dim=latent_dim)
+            return GaussHyperNet(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=output_dim, hyper_hidden_dim=hyper_hidden_dim, latent_dim=latent_dim)
         elif model_type == 'MLPNet':
             from models.mlpnet import MLPNet
             return MLPNet(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=output_dim, dropout_rate=dropout_rate)

@@ -6,562 +6,12 @@ import itertools
 from utils.metrics import metrics
 from utils.saver.general_saver import save_plot
 from utils.loader.single_task_loader import single_task_overlay_loader
+from utils.plots.plot_helpers import label_subplots, iclr_figsize
+plt.style.use("utils/plots/iclr.mplstyle")
 
 # Single Plots=========================================================================================
 
-def plot_coverage_two_panel(
-    preds_by_model,   # dict: {model_name: preds (S,N) or (S,N,1)}
-    y_true,           # (N,)
-    ind_interp, ind_extrap, ind_test,   # idx arrays or boolean masks
-    levels=(0.5, 0.6, 0.7, 0.8, 0.9, 0.95),
-    model_colors=None,                  # dict model->color
-    save_dir=None, fname="coverage_two_panel",
-    block=False, show_ci=True
-):
-    """
-    Two-panel nominal vs empirical coverage overlay across models.
-      Left  : test ∩ interpolation
-      Right : test ∩ extrapolation
-    """
-    y = np.squeeze(np.asarray(y_true))
-    N = y.shape[0]
-
-    def _to_index_local(idx_like, N):
-        arr = np.asarray(idx_like)
-        if arr.dtype == bool:
-            assert arr.shape[0] == N, "boolean mask must match N"
-            return np.flatnonzero(arr)
-        return arr.astype(int)
-
-    ii = _to_index_local(ind_interp, N)
-    ie = _to_index_local(ind_extrap, N)
-    it = _to_index_local(ind_test,   N)
-
-    it_i = np.intersect1d(it, ii)   # test ∩ interp
-    it_e = np.intersect1d(it, ie)   # test ∩ extrap
-
-    # Container for stats you can dump into a table/caption
-    stats = {"interp": {}, "extrap": {}}
-
-    panels = [("Interpolation", it_i), ("Extrapolation", it_e)]
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharex=True, sharey=True)
-
-    for ax, (panel_name, idx) in zip(axes, panels):
-        # diagonal (ideal)
-        ax.plot([levels[0], levels[-1]], [levels[0], levels[-1]], "k--", lw=1, label="Ideal")
-        for mname, P in preds_by_model.items():
-            P = np.squeeze(np.asarray(P))
-            assert P.ndim == 2, f"{mname}: preds must be (S,N) or (S,N,1)"
-            S, Np = P.shape
-            assert Np == N, f"{mname}: N mismatch"
-
-            # subset to panel points
-            if idx.size == 0:
-                continue
-            P_sub = P[:, idx]
-            y_sub = y[idx]
-
-            cov = coverage_curve_from_samples(P_sub, y_sub, levels=levels)
-            emp = cov["empirical"]                # (K,)
-            K = len(emp)
-            color = model_colors.get(mname, None) if model_colors else None
-            ax.plot(levels, emp, marker='o', lw=2, label=mname, color=color)
-
-            # binomial CI (normal approx). Optional but handy.
-            if show_ci:
-                n = float(len(y_sub))
-                se = np.sqrt(np.maximum(emp*(1-emp)/np.maximum(n,1.0), 1e-12))
-                ax.fill_between(levels, emp - 1.96*se, emp + 1.96*se,
-                                alpha=0.12, linewidth=0, color=color)
-
-            # stash stats
-            stats_key = "interp" if panel_name == "Interpolation" else "extrap"
-            stats[stats_key][mname] = {
-                "N": int(len(y_sub)),
-                "levels": np.array(levels, dtype=float),
-                "empirical": np.array(emp, dtype=float)
-            }
-
-        ax.set_title(f"Coverage vs Nominal — {panel_name}")
-        ax.set_xlabel("Nominal coverage (α)")
-        ax.set_ylabel("Empirical coverage")
-        ax.grid(True, alpha=0.3)
-        ax.set_xlim(levels[0], levels[-1])
-        ax.set_ylim(levels[0], levels[-1])
-
-    # one legend
-    handles, labels = axes[0].get_legend_handles_labels()
-    if len(handles) == 0:   # models added on the right axis only
-        handles, labels = axes[1].get_legend_handles_labels()
-    if handles:
-        fig.legend(handles, labels, loc="lower center", ncol=min(4, len(labels)))
-        fig.subplots_adjust(bottom=0.2)
-
-    fig.tight_layout()
-    if save_dir:
-        save_plot(save_dir, fname)
-    if block:
-        plt.show()
-    plt.close(fig)
-
-def plot_pit_two_panel(
-    x,
-    y_true,
-    preds,                      # (S,N) or (S,N,1)
-    ind_interp,                 # indices or boolean mask (N,)
-    ind_extrap,                 # indices or boolean mask (N,)
-    ind_test,                   # indices or boolean mask (N,)
-    ind_train,                  # indices or boolean mask (N,)
-    interp_min=None,            # optional shading
-    interp_max=None,
-    randomized=True,
-    trend=True,                 # draw running median + 10–90% band
-    trend_window=None,          # None -> auto
-    save_dir=None,
-    fname="pit_two_panel",
-    block=False,
-):
-    """
-    Two-panel PIT vs x: left = test interpolation, right = test extrapolation.
-    Returns dict with summary stats for each panel.
-    """
-    x = np.squeeze(np.asarray(x))
-    y_true = np.squeeze(np.asarray(y_true))
-    N = x.shape[0]
-
-    ii = _to_index(ind_interp, N)
-    ie = _to_index(ind_extrap, N)
-    it = _to_index(ind_test,   N)
-    ir = _to_index(ind_train,  N)
-
-    it_i = np.intersect1d(it, ii)   # test ∩ interp
-    it_e = np.intersect1d(it, ie)   # test ∩ extrap
-
-    # PIT for all points (so we can also show training for context)
-    u_all = _compute_pit_from_mc(y_true, preds, randomized=randomized)
-    stats = {}
-
-    # convenience sorter
-    def sorted_subset(idx):
-        order = np.argsort(x[idx])
-        return x[idx][order], u_all[idx][order], idx[order]
-
-    panels = [
-        ("PIT vs x — Test Interpolation", it_i, "red"),
-        ("PIT vs x — Test Extrapolation", it_e, "blue"),
-    ]
-
-    plt.figure(figsize=(12, 5))
-    for k, (title, idx, color) in enumerate(panels):
-        ax = plt.subplot(1, 2, k+1)
-
-        xs, us, idx_sorted = sorted_subset(idx)
-        x_tr, u_tr = x[ir], u_all[ir]
-
-        # refs
-        ax.axhline(0.5, color='gray', linestyle='--', linewidth=1, alpha=0.9)
-        ax.axhline(0.1, color='gray', linestyle=':', linewidth=1, alpha=0.6)
-        ax.axhline(0.9, color='gray', linestyle=':', linewidth=1, alpha=0.6)
-
-        if interp_min is not None and interp_max is not None:
-            ax.axvspan(interp_min, interp_max, color='C1', alpha=0.08, lw=0)
-
-        # scatter
-        ax.scatter(xs, us, s=14, alpha=0.85, c=color,
-                   label=f"{'Interp' if k==0 else 'Extrap'} Test (N={len(us)})")
-        ax.scatter(x_tr, u_tr, s=12, alpha=0.5, facecolors='none', edgecolors='green',
-                   label="Training points")
-
-        # trend
-        if trend and len(us) >= 5:
-            q50, q10, q90 = _rolling_quantiles(xs, us, window=trend_window)
-            ax.plot(xs, q50, lw=2, color=color, alpha=0.9, label="running median")
-            ax.fill_between(xs, q10, q90, color=color, alpha=0.15, linewidth=0,
-                            label="10–90% band")
-        else:
-            q50 = np.median(us); q10 = np.quantile(us,0.10); q90 = np.quantile(us,0.90)
-
-        # axes & labels
-        ax.set_xlim(np.min(x), np.max(x))
-        ax.set_ylim(0.0, 1.0)
-        ax.set_xlabel(r"$x$")
-        ax.set_ylabel(r"$u = \hat F_x(y)$")
-        ax.set_title(title)
-        ax.grid(True, alpha=0.3)
-        ax.legend(frameon=False)
-
-        # summary stats for this panel
-        med = float(np.median(us)) if len(us)>0 else np.nan
-        q10g = float(np.quantile(us, 0.10)) if len(us)>0 else np.nan
-        q90g = float(np.quantile(us, 0.90)) if len(us)>0 else np.nan
-        band = q90g - q10g if len(us)>0 else np.nan
-        pval, ks = _uniformity_p(us)
-        stats["interp" if k==0 else "extrap"] = {
-            "N": int(len(us)),
-            "median": med,
-            "median_delta": med - 0.5,   # bias (ideal 0)
-            "q10": q10g,
-            "q90": q90g,
-            "band_10_90": band,          # ideal ≈ 0.8
-            "ks_pvalue": pval,           # None if SciPy not installed
-            "ks_stat": ks,
-        }
-
-    plt.tight_layout()
-    if save_dir:
-        save_plot(save_dir, fname)
-    if block:
-        plt.show()
-    plt.close()
-
-
-
-
-
-def plot_loss_curve(losses, mses, kls, betas, title="Training Loss Curve", desc=None, save_dir=None, block=False):
-    """
-    Plots total loss, MSE, KL divergence, and beta schedule in subplots.
-
-    Args:
-        losses (list): total loss per epoch
-        mses (list): mse per epoch
-        kls (list): kl divergence per epoch
-        betas (list): beta value per epoch
-        title (str): overall title for the plot
-        desc (str): additional description
-        save_path (str): full file path to save the figure (e.g., 'results/ModelX/loss_curve.png')
-        block (bool): if True, blocks the plot window (interactive mode)
-    """
-    if desc:
-        title += f": {desc}"
-
-    losses = [l.item() if hasattr(l, 'item') else l for l in losses]
-    mses   = [m.item() if hasattr(m, 'item') else m for m in mses]
-    kls    = [k.item() if hasattr(k, 'item') else k for k in kls]
-    betas  = [b.item() if hasattr(b, 'item') else b for b in betas]
-
-    epochs = range(len(losses))
-
-    _, axs = plt.subplots(2, 1, num="Total Loss, MSE, and KL Divergence Plot", figsize=(10, 8), sharex=True)
-
-    # Top subplot: Loss curves
-    axs[0].plot(epochs, losses, label="Total Loss", color="blue")
-    axs[0].plot(epochs, mses,   label="MSE", color="green")
-    axs[0].plot(epochs, kls,    label="KL Divergence", color="red")
-    axs[0].set_ylabel("Loss Value")
-    axs[0].set_title(title)
-    axs[0].grid(True)
-    axs[0].legend()
-
-    # Bottom subplot: Beta schedule
-    axs[1].plot(epochs, betas, label="Beta", color="black")
-    axs[1].set_xlabel("Epoch")
-    axs[1].set_ylabel("β")
-    axs[1].grid(True)
-    axs[1].legend()
-
-    plt.tight_layout()
-
-    if save_dir:
-        save_plot(save_dir, "loss_curve")
-    if block:
-        plt.show()
-    plt.close()
-
-def plot_residual_scatter(x, res_prec, res_acc, bias, interp_min, interp_max, save_dir=None, block=False):
-    _, axs = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-    for ii in range(res_prec.shape[1]):
-        axs[0].scatter(x, res_prec[:, ii], alpha=0.05, color=np.random.rand(3))
-    axs[0].axvline(x=interp_min, color='red', linestyle='--')
-    axs[0].axvline(x=interp_max, color='red', linestyle='--')
-    axs[0].set_title(f"Residual Precision Task")
-    axs[0].grid(True)
-
-    for ii in range(res_acc.shape[1]):
-        axs[1].scatter(x, res_acc[:, ii], alpha=0.05, color=np.random.rand(3))
-    axs[1].plot(x, bias, label='Bias', color='red')
-    axs[1].axvline(x=interp_min, color='red', linestyle='--')
-    axs[1].axvline(x=interp_max, color='red', linestyle='--')
-    axs[1].set_title(f"Residual Accuracy Task")
-    axs[1].legend()
-    axs[1].set_xlabel("x")
-    axs[1].grid(True)
-    plt.tight_layout()
-    if save_dir:
-        save_plot(save_dir, "residual_scatter")
-    if block:
-        plt.show()
-    plt.close()
-
-def plot_mean_prediction(x_t_np, y_t_np, mean, std, preds, x_c_np, y_c_np, x_c_min, x_c_max, save_dir=None, block=False, zoom=False):
-    plt.figure(figsize=(10, 8))
-    for ii in range(preds.shape[0]):
-        plt.scatter(x_t_np, preds[ii, :], alpha=0.05, color=np.random.rand(3))
-    plt.plot(x_t_np, y_t_np, label="Ground Truth", linestyle="--")
-    plt.plot(x_t_np, mean, label="Mean Prediction")
-    plt.fill_between(x_t_np, mean - std, mean + std, alpha=0.3, label="±1 Std Dev")
-    plt.scatter(x_c_np, y_c_np, color="red", label="Training Points", alpha=0.5)
-    plt.axvline(x=x_c_min, color='red', linestyle='--')
-    plt.axvline(x=x_c_max, color='red', linestyle='--')
-    if zoom:
-        plt.ylim([y_t_np.min()-1, y_t_np.max()+1])
-    plt.title(r"$\mu$ vs $x$")
-    plt.xlabel("x")
-    plt.legend()
-    plt.grid(True)
-    if save_dir:
-        save_plot(save_dir, "zoomed_mean_prediction" if zoom else "mean_prediction")
-    if block:
-        plt.show()
-    plt.close()
-
-def plot_variance(x, var, mean, ind_c, interp_min, interp_max, save_dir=None, block=False):
-    _, axs = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-    axs[0].plot(x, mean)
-    axs[0].scatter(x[ind_c], mean[ind_c], label='Training Points', color='red', s=10)
-    axs[0].set_title(r"$\mu$ vs $x$")
-    axs[0].axvline(x=interp_min, color='red', linestyle='--')
-    axs[0].axvline(x=interp_max, color='red', linestyle='--')
-    axs[0].set_ylabel(r"$\mu$")
-    axs[0].grid(True)
-
-    axs[1].plot(x, 10 * np.log10(var))
-    axs[1].scatter(x[ind_c], 10 * np.log10(var[ind_c]), label='Training Points', color='red', s=10)
-    axs[1].set_title(r"$\sigma_{\hat{y}}^2$ $(dB)$ vs $x$")
-    axs[1].axvline(x=interp_min, color='red', linestyle='--')
-    axs[1].axvline(x=interp_max, color='red', linestyle='--')
-    axs[1].set_ylabel( r"$\sigma_{\hat{y}}^2$")
-    axs[1].grid(True)
-    axs[1].set_xlabel("x")
-    plt.tight_layout()
-    if save_dir:
-        save_plot(save_dir, "mean_and_var_dB")
-    if block:
-        plt.show()
-    plt.close()
-
-def plot_bias_mse(x, bias, mse, ind_c, interp_min, interp_max, save_dir=None, block=False):
-    _, axs = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-    axs[0].plot(x, bias)
-    axs[0].scatter(x[ind_c], bias[ind_c], label='Training Points', color='red', s=10)
-    axs[0].set_title(r"$Bias$ vs $x$")
-    axs[0].axvline(x=interp_min, color='red', linestyle='--')
-    axs[0].axvline(x=interp_max, color='red', linestyle='--')
-    axs[0].grid(True)
-
-    axs[1].plot(x, 10 * np.log10(mse))
-    axs[1].scatter(x[ind_c], 10 * np.log10(mse[ind_c]), label='Training Points', color='red', s=10)
-    axs[1].set_title(r"$MSE$ (dB) vs $x$")
-    axs[1].axvline(x=interp_min, color='red', linestyle='--')
-    axs[1].axvline(x=interp_max, color='red', linestyle='--')
-    axs[1].grid(True)
-    axs[1].set_xlabel("x")
-    plt.tight_layout()
-    if save_dir:
-        save_plot(save_dir, "bias_and_mse_dB")
-    if block:
-        plt.show()
-    plt.close()
-
-def plot_nlpd(x, nlpd_kde, nlpd_hist, ind_c, interp_min, interp_max, save_dir=None, block=False):
-    plt.figure(figsize=(10, 6))
-    plt.plot(x, nlpd_kde, color="purple")
-    plt.scatter(x[ind_c], nlpd_kde[ind_c], label="Training Points", color="red", s=10)
-    plt.axvline(x=interp_min, color='red', linestyle='--')
-    plt.axvline(x=interp_max, color='red', linestyle='--')
-    plt.title(r"$- \log\left( p(y_{\text{truth}} \mid x) \right)$ vs $x$")
-    plt.xlabel(r"$x$")
-    plt.ylabel(r"$- \log\left( p(y_{\text{truth}} \mid x) \right)$")
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-    if save_dir:
-        save_plot(save_dir, "nlpd_kde")
-    if block:
-        plt.show()
-    plt.close()
-
-    plt.figure(figsize=(10, 6))
-    plt.plot(x, nlpd_hist, color="purple")
-    plt.scatter(x[ind_c], nlpd_hist[ind_c], label="Training Points", color="red", s=10)
-    plt.axvline(x=interp_min, color='red', linestyle='--')
-    plt.axvline(x=interp_max, color='red', linestyle='--')
-    plt.title(r"$- \log\left( p(y_{\text{truth}} \mid x) \right)$ vs $x$")
-    plt.xlabel(r"$x$")
-    plt.ylabel(r"$- \log\left( p(y_{\text{truth}} \mid x) \right)$")
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-    if save_dir:
-        save_plot(save_dir, "nlpd_hist")
-    if block:
-        plt.show()
-    plt.close()
-
-def plot_crps(x, crps, ind_c, interp_min, interp_max, save_dir=None, block=False):
-    plt.figure(figsize=(10, 6))
-    plt.plot(x, crps, color="purple")
-    plt.scatter(x[ind_c], crps[ind_c], label="Training Points", color="red", s=10)
-    plt.axvline(x=interp_min, color='red', linestyle='--')
-    plt.axvline(x=interp_max, color='red', linestyle='--')
-    plt.title(r"$CRPS$ vs $x$")
-    plt.xlabel(r"$x$")
-    plt.ylabel(r"$CRPS$ $(dB)$")
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-    if save_dir:
-        save_plot(save_dir, "crps")
-    if block:
-        plt.show()
-    plt.close()    
-
-def plot_y_vs_x_2x2(x, y, xlabel, ylabel, fname, ind_interp, ind_extrap, ind_test, ind_train, db_scale=True, save_dir=None, block=False):
-    ind_test_interp = np.intersect1d(ind_test, ind_interp)
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10), sharex=True, sharey=True)
-    titles = ["Test Points", "Training Points", "Test Interpolation Points", "Test Extrapolation Points"]
-    indices = [ind_test, ind_train, ind_test_interp, ind_extrap]
-    colors = ["red", "green", "blue", "orange"]
-
-    for ax, title, idx, color in zip(axes.flat, titles, indices, colors):
-        ax.scatter(x[idx], y[idx],
-                   alpha=1.0, s=10, c=color)
-        ax.set_title(title)
-        ax.grid(True)
-    
-    fig.suptitle(f"{ylabel} vs {xlabel}", fontsize=16)
-    xlabel = xlabel + r" $(dB)$" if db_scale and xlabel != r"$- \log\left( p(y_{\text{truth}} \mid x) \right)$" else xlabel
-    ylabel = ylabel + r" $(dB)$" if db_scale and ylabel != r"$- \log\left( p(y_{\text{truth}} \mid x) \right)$" else ylabel
-    fig.supxlabel(xlabel)
-    fig.supylabel(ylabel)
-    plt.tight_layout(rect=[0, 0, 1, 0.95])  # leave space for suptitle
-    if save_dir:
-        save_plot(save_dir, fname)
-    if block:
-        plt.show()
-    plt.close()
-
-def plot_y_vs_x(x, y, xlabel, ylabel, fname, ind_interp, ind_extrap, ind_test, ind_train, db_scale, save_dir=None, block=False):
-    ind_test_interp = np.intersect1d(ind_test, ind_interp)
-    plt.figure(figsize=(10,8))
-    plt.scatter(x[ind_test_interp], y[ind_test_interp], alpha=1.0, s=10, c="red", label="Test Interpolation Points")
-    plt.scatter(x[ind_extrap], y[ind_extrap], alpha=1.0, s=10, c="blue", label="Test Extrapolation Points")
-    plt.scatter(x[ind_train], y[ind_train], alpha=1.0, s=10, c="green", label="Training Points")
-    plt.title(f"{ylabel} vs {xlabel}")
-    xlabel = xlabel + r" $(dB)$" if db_scale and xlabel != r"$- \log\left( p(y_{\text{truth}} \mid x) \right)$" else xlabel
-    ylabel = ylabel + r" $(dB)$" if db_scale and ylabel != r"$- \log\left( p(y_{\text{truth}} \mid x) \right)$" else ylabel
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    if save_dir:
-        save_plot(save_dir, fname)
-    if block:
-        plt.show()
-    plt.close()
-
-def pdf_and_nll_heatmap(pdf_kde, grid_kde, pdf_hist, grid_hist, preds, x, y, x_min, x_max, save_dir=None, block=False):
-    """
-    Waterfall-style histogram of pdf and nll
-    """
-    # n_x = preds.shape[1]
-    # hist_matrix = []
-
-    # for i in range(n_x):
-    #     hist, _ = np.histogram(preds[:, i], bins=bins, range=(preds.min(), preds.max()), density=True)
-    #     hist_matrix.append(hist)
-
-    # hist_matrix = np.array(hist_matrix).T  # shape: [bins, n_x]
-
-    pdf_kde = pdf_kde.T
-    pdf_hist = pdf_hist.T
-
-    y_kde = y[(y<=grid_kde.max()) & (y >= grid_kde.min())]
-    x_kde = x[(y<=grid_kde.max()) & (y >= grid_kde.min())]
-
-    y_hist = y[(y<=grid_hist.max()) & (y >= grid_hist.min())]
-    x_hist = x[(y<=grid_hist.max()) & (y >= grid_hist.min())]
-    
-    plt.figure(figsize=(12, 6))
-    plt.imshow(pdf_kde, aspect='auto', origin='lower',
-               extent=[x.min(), x.max(), grid_kde.min(), grid_kde.max()],
-               cmap='viridis')
-    plt.colorbar()
-    plt.plot(x_kde,y_kde,c="red")
-    plt.axvline(x=x_min, color='black', linestyle='--')
-    plt.axvline(x=x_max, color='black', linestyle='--')
-    plt.title(r"$p(y|x)$")
-    plt.xlabel(r"$x$")
-    plt.ylabel(r"$y$")
-    plt.ticklabel_format(style='plain')
-    plt.tight_layout()
-    if save_dir:
-        save_plot(save_dir, "pdf_kde_heatmap")
-    if block:
-        plt.show()
-    plt.close()
-
-    plt.figure(figsize=(12, 6))
-    plt.imshow(pdf_hist, aspect='auto', origin='lower',
-               extent=[x.min(), x.max(), grid_hist.min(), grid_hist.max()],
-               cmap='viridis')
-    plt.colorbar()
-    plt.plot(x_hist,y_hist,c="red")
-    plt.axvline(x=x_min, color='black', linestyle='--')
-    plt.axvline(x=x_max, color='black', linestyle='--')
-    plt.title(r"$p(y|x)$")
-    plt.xlabel(r"$x$")
-    plt.ylabel(r"$y$")
-    plt.ticklabel_format(style='plain')
-    plt.tight_layout()
-    if save_dir:
-        save_plot(save_dir, "pdf_hist_heatmap")
-    if block:
-        plt.show()
-    plt.close()
-
-    nll = -np.log(pdf_kde + 1e-12)
-    plt.figure(figsize=(12, 6))
-    plt.imshow(nll, aspect='auto', origin='lower',
-               extent=[x.min(), x.max(), grid_kde.min(), grid_kde.max()],
-               cmap='viridis')
-    plt.colorbar()
-    plt.plot(x_kde,y_kde,c="red")
-    plt.axvline(x=x_min, color='black', linestyle='--')
-    plt.axvline(x=x_max, color='black', linestyle='--')
-    plt.title(r"$- \log\left( p(y \mid x) \right)$")
-    plt.xlabel(r"$x$")
-    plt.ylabel(r"$y$")
-    plt.ticklabel_format(style='plain')
-    plt.tight_layout()
-    if save_dir:
-        save_plot(save_dir, "nll_kde_heatmap")
-    if block:
-        plt.show()
-    plt.close()
-
-    nll = -np.log(pdf_hist + 1e-12)
-    plt.figure(figsize=(12, 6))
-    plt.imshow(nll, aspect='auto', origin='lower',
-               extent=[x.min(), x.max(), grid_hist.min(), grid_hist.max()],
-               cmap='viridis')
-    plt.colorbar()
-    plt.plot(x_hist,y_hist,c="red")
-    plt.axvline(x=x_min, color='black', linestyle='--')
-    plt.axvline(x=x_max, color='black', linestyle='--')
-    plt.title(r"$- \log\left( p(y \mid x) \right)$")
-    plt.xlabel(r"$x$")
-    plt.ylabel(r"$y$")
-    plt.ticklabel_format(style='plain')
-    plt.tight_layout()
-    if save_dir:
-        save_plot(save_dir, "nll_hist_heatmap")
-    if block:
-        plt.show()
-    plt.close()
-
-def single_task_plots(trainer, preds, x_train, y_train, x_test, y_test, desc, ind_train, ind_test, ind_interp, ind_extrap, region_interp, metric_outputs=None, block=False, save_dir=None, capabilities=set()):
+def single_task_plots(trainer, preds, x_train, y_train, x_test, y_test, ind_train, ind_test, ind_interp, ind_extrap, region_interp, metric_outputs=None, kl_exist=True, is_stoch=True, block=False, save_dir=None, plot_types=list()):
     """
     Single task regression plots.
 
@@ -571,7 +21,6 @@ def single_task_plots(trainer, preds, x_train, y_train, x_test, y_test, desc, in
         y_train (torch.Tensor): training y values
         x_test (torch.Tensor): test x values
         y_test (torch.Tensor): test y values
-        desc (str): plot title description
         ind_train (np.ndarray): indices of training points in x_test
         region_interp (tuple): min and max of interpolation region
         metric_outputs (tuple): consist of relevant metrics
@@ -615,22 +64,72 @@ def single_task_plots(trainer, preds, x_train, y_train, x_test, y_test, desc, in
     pdf_hist  = metric_outputs["pdf_hist"]
     crps      = metric_outputs["crps"]
 
-    plot_loss_curve(trainer.losses, trainer.mses, trainer.kls, trainer.betas, desc=desc, 
+
+    # db_metrics = {'var', 'mse', 'crps',  'bias'} 
+    # for metric, metric_key in metric_outputs.items():
+    #     if metric_key in db_metrics:
+    #         metric = _dB(metric) if metric_key != 'bias' else _dB(metric**2)
+    #         metric_label
+        
+            
+    #     plot_metric_vs_x(x=x_test_np, metric=_dB(var), metric_label=r"$\sigma_{\hat{y}}^{2}$ $(dB)$", save_name='var_db_vs_x',
+    #                     ind_train=ind_train, interp_min=x_min, interp_max=x_max, title=r"$\sigma_{\hat{y}}^{2}$ vs $x$",
+    #                     save_dir=metric_path, block=True)
+    
+    # plot_types = ['residulas_vs_x', 'mean_vs_x', 'pit_two_panel', 'pdf_heatmap', "mse_vs_x", "nlpd_vs_x", 'crps_vs_x']
+
+    plot_all = True if len(plot_types) == 0  else False
+
+    # Loss, MSE, KL, and Beta Scheduler Plot
+    if 'loss_vs_epoch' in plot_types or plot_all:
+        plot_loss_curve(trainer.losses, trainer.mses, trainer.kls, trainer.betas, title=None, kl_exist=kl_exist, 
                 save_dir=losses_save_path, block=False)
-
-    if "residuals" in capabilities:
+        
+    # Metric vs x Plots
+    if 'mean_vs_x' in plot_types or plot_all:
+        plot_mean_prediction(x_test_np, y_test_np, mean, std, preds, x_train_np, y_train_np, x_min, x_max, is_stoch=is_stoch, save_dir=metric_path, block=block, zoom=False)
+    if ("nlpd_kde_vs_x" in plot_types or plot_all) and is_stoch:
+        plot_metric_vs_x(x=x_test_np, metric=nlpd_kde, metric_label=r"$- \log\left( p(y_{\text{truth}} \mid x) \right)$", ind_train=ind_train, interp_min=x_min, interp_max=x_max,
+                        save_name='nlpd_kde_vs_x', title=None, save_dir=metric_path, block=block)
+    if ("nlpd_hist_vs_x" in plot_types or plot_all) and is_stoch:
+        plot_metric_vs_x(x=x_test_np, metric=nlpd_hist, 
+        metric_label=r"$- \log\left( p(y_{\text{truth}} \mid x) \right)$", ind_train=ind_train, 
+        interp_min=x_min, interp_max=x_max, save_name='nlpd_hist_vs_x', title=None, save_dir=metric_path, block=block)
+    if ('crps_vs_x' in plot_types or plot_all) and is_stoch:
+        plot_metric_vs_x(x=x_test_np, metric=_dB(crps), metric_label=r"$CRPS$ $(dB)$", 
+        ind_train=ind_train, interp_min=x_min, interp_max=x_max, save_name='crps_db_vs_x', 
+        title=None, save_dir=metric_path, block=block)
+    if ('residulas_vs_x' in plot_types or plot_all) and is_stoch:
         plot_residual_scatter(x_test_np, res_prec, res_acc, bias, x_min, x_max, save_dir=metric_path, block=block)
-    if "mean" in capabilities:
-        plot_mean_prediction(x_test_np, y_test_np, mean, std, preds, x_train_np, y_train_np, x_min, x_max, save_dir=metric_path, block=block, zoom=False)
-        # plot_mean_prediction(x_test_np, y_test_np, mean, std, preds, x_train_np, y_train_np, x_min, x_max, save_dir=save_dir, block=block, zoom=True)
-    if "variance" in capabilities:
+    if ("mean_var_stacked_vs_x" in plot_types or plot_all) and is_stoch:
+        plot_two_panel_metric_vs_x(x=x_test_np, metrics=[mean, _dB(var)], ind_train=ind_train, interp_min=x_min, 
+                            interp_max=x_max, ylabels=[r"$\mu_{\hat{y}}$", r"$\sigma_{\hat{y}}^{2}$ $(dB)$"], 
+                            save_dir=metric_path, fname='mean_var_db_vs_x', block=block)
+    elif not is_stoch:
+        plot_metric_vs_x(x=x_test_np, metric=mean, metric_label=r"$\mu_{\hat{y}}$", 
+        ind_train=ind_train, interp_min=x_min, interp_max=x_max, save_name='mean_vs_x', 
+        title=None, save_dir=metric_path, block=block)
+    if ("bias_mse_stacked_vs_x" in plot_types or plot_all) and is_stoch:
+        plot_two_panel_metric_vs_x(x=x_test_np, metrics=[_dB(bias**2), _dB(mse)], ind_train=ind_train, interp_min=x_min, 
+                    interp_max=x_max, ylabels=[r"$Bias^{2}$ $(dB)$", r"$MSE$ $(dB)$"], 
+                    save_dir=metric_path, fname="bias_sq_db_mse_db_vs_x", block=block)
+    elif not is_stoch:
+        plot_metric_vs_x(x=x_test_np, metric=_dB(mse), metric_label=r"$MSE$ $(dB)$", 
+        ind_train=ind_train, interp_min=x_min, interp_max=x_max, save_name='mse_db_vs_x', 
+        title=None, save_dir=metric_path, block=block)
 
-        plot_pit_two_panel(x_test_np, y_test_np, preds, ind_interp, ind_extrap, ind_test, ind_train, save_dir=save_dir, block=block)
-
-        plot_variance(x_test_np, var, mean, ind_train, x_min, x_max, save_dir=metric_path, block=block)
-
-        # pdf_and_nll_heatmap(preds, x_test_np, y_test_np, x_min, x_max, bins=50, save_dir=save_dir, block=block)
-        pdf_and_nll_heatmap(pdf_kde, grid_kde, pdf_hist, grid_hist, preds, x_test_np, y_test_np, x_min, x_max, save_dir=calibration_save_path, block=block)
+    # Calibration Plots
+    if is_stoch:
+        if 'pit_two_panel' in plot_types or plot_all:
+            plot_pit_two_panel(x_test_np, y_test_np, preds, ind_interp, ind_extrap, ind_test, ind_train, save_dir=calibration_save_path, block=block)
+        if 'pdf_kde_heatmap' in plot_types or plot_all:
+            metric_heatmap(metric=pdf_kde, grid=grid_kde, x=x_test_np, y=y_test_np, x_min=x_min, x_max=x_max, save_name='pdf_kde_heatmap', save_dir=calibration_save_path, block=block)
+        if 'nll_kde_heatmap' in plot_types or plot_all:
+            metric_heatmap(metric=-np.log(pdf_kde+1e-12), grid=grid_kde, x=x_test_np, y=y_test_np, x_min=x_min, x_max=x_max, save_name='nll_kde_heatmap', save_dir=calibration_save_path, block=block)
+        if 'pdf_hist_heatmap' in plot_types or plot_all:   
+            metric_heatmap(metric=pdf_hist, grid=grid_hist, x=x_test_np, y=y_test_np, x_min=x_min, x_max=x_max, save_name='pdf_hist_heatmap', save_dir=calibration_save_path, block=block)
+        if 'nll_hist_heatmap' in plot_types or plot_all:
+            metric_heatmap(metric=-np.log(pdf_hist+1e-12), grid=grid_hist, x=x_test_np, y=y_test_np, x_min=x_min, x_max=x_max, save_name='nll_hist_heatmap', save_dir=calibration_save_path, block=block) 
 
         var_str = r"$\sigma_{\hat{y}}^2$"
         bias_sq_str = r"$Bias^2$"
@@ -639,7 +138,6 @@ def single_task_plots(trainer, preds, x_train, y_train, x_test, y_test, desc, in
         nlpd_str = r"$- \log\left( p(y_{\text{truth}} \mid x) \right)$"
         crps_str = r"$CRPS$"
 
-        ###########################################
         metric_key = ["var_db", "mse_db", "bias_sq_db", "nlpd_kde", "nlpd_hist", "crps_db"]
         db_metrics = ["var_db", "mse_db", "bias_sq_db", "crps_db"]
         metric_dict = {
@@ -665,32 +163,461 @@ def single_task_plots(trainer, preds, x_train, y_train, x_test, y_test, desc, in
             fname = key_y + "_vs_" + key_x
             fname_2x2 = fname + "_2x2"
 
-            plot_y_vs_x(x=metric_x, y=metric_y, xlabel=xlabel, ylabel=ylabel, fname=fname, ind_interp=ind_interp, ind_extrap=ind_extrap, ind_test=ind_test, ind_train=ind_train, db_scale=True, save_dir=calibration_save_path, block=block)
-            plot_y_vs_x_2x2(x=metric_x, y=metric_y, xlabel=xlabel, ylabel=ylabel, fname=fname_2x2, ind_interp=ind_interp, ind_extrap=ind_extrap, ind_test=ind_test, ind_train=ind_train, db_scale=True, save_dir=calibration_save_path, block=block)
+            # plot_types.append(fname)
+            # plot_types.append(fname_2x2)
+
+            if fname in plot_types or plot_all:
+                plot_y_vs_x(x=metric_x, y=metric_y, xlabel=xlabel, ylabel=ylabel, fname=fname, ind_interp=ind_interp, ind_extrap=ind_extrap, ind_test=ind_test, ind_train=ind_train, db_scale=True, save_dir=calibration_save_path, block=block)
+            if fname_2x2 in plot_types or plot_all:
+                plot_y_vs_x_2x2(x=metric_x, y=metric_y, xlabel=xlabel, ylabel=ylabel, fname=fname_2x2, ind_interp=ind_interp, ind_extrap=ind_extrap, ind_test=ind_test, ind_train=ind_train, db_scale=True, save_dir=calibration_save_path, block=block)
         
-    if "bias" in capabilities:
-        plot_bias_mse(x_test_np, bias, mse, ind_train, x_min, x_max, save_dir=metric_path, block=block)
-    if "nlpd" in capabilities:
-        plot_nlpd(x_test_np, nlpd_kde, nlpd_hist, ind_train, x_min, x_max, save_dir=metric_path, block=block)
-        plot_crps(x_test_np, _dB(crps), ind_train, x_min, x_max, save_dir=metric_path, block=block)
+    # print(plot_types)
+
+
+
+
+
+# Single Task Plots: Loss Curve Plots=========================================================================================
+
+def plot_loss_curve(losses, mses, kls, betas, title="Training Loss Curve", kl_exist=True, save_dir=None, block=False):
+    """
+    Plots total loss, MSE, KL divergence, and beta schedule in subplots.
+
+    Args:
+        losses (list): total loss per epoch
+        mses (list): mse per epoch
+        kls (list): kl divergence per epoch
+        betas (list): beta value per epoch
+        title (str): overall title for the plot
+        save_path (str): full file path to save the figure (e.g., 'results/ModelX/loss_curve.png')
+        block (bool): if True, blocks the plot window (interactive mode)
+    """
+
+    losses = [l.item() if hasattr(l, 'item') else l for l in losses]
+    mses   = [m.item() if hasattr(m, 'item') else m for m in mses]
+    kls    = [k.item() if hasattr(k, 'item') else k for k in kls]
+    betas  = [b.item() if hasattr(b, 'item') else b for b in betas]
+
+    epochs = range(1, len(losses)+1)
+
+    if kl_exist:
+        _, axs = plt.subplots(2, 1, num="Total Loss, MSE, and KL Divergence Plot", figsize=iclr_figsize(layout="stacked"), sharex=True)
+
+        # Top subplot: Loss curves
+        axs[0].plot(epochs, losses, label="Total Loss", color="blue")
+        axs[0].plot(epochs, mses,   label="MSE", color="green")
+        axs[0].plot(epochs, kls,    label="KL Divergence", color="red")
+        axs[0].set_ylabel("Loss Value")
+        if title is not None:
+            axs[0].set_title(title)
+        axs[0].grid(True)
+        axs[0].legend()
+
+        # Bottom subplot: Beta schedule
+        axs[1].plot(epochs, betas, label="Beta", color="black")
+        axs[1].set_xlabel("Epoch")
+        axs[1].set_ylabel("β")
+        axs[1].grid(True)
+        axs[1].legend()
+
+        label_subplots(axs)
+
+        plt.tight_layout()
+
+    else:
+        fig, ax = plt.subplots(figsize=iclr_figsize(layout="single"),
+                            num="Total Loss Plot")
+
+        # Single subplot: Loss only
+        ax.plot(epochs, losses, label="Total Loss", color="blue")
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Loss Value")
+        if title is not None:
+            ax.set_title(title)
+        ax.grid(True)
+        ax.legend()
+
+        plt.tight_layout()
+
+    if save_dir:
+        save_plot(save_dir, "loss_vs_epoch")
+    if block:
+        plt.show()
+    plt.close()
+
+# Single Task Plots: Metric Plots=========================================================================================
+
+def plot_residual_scatter(x, res_prec, res_acc, bias, interp_min, interp_max, save_dir=None, set_title=False, block=False):
+
+    _, axs = plt.subplots(2, 1, figsize=iclr_figsize(layout="stacked"), sharex=True)
+    for ii in range(res_prec.shape[1]):
+        axs[0].scatter(x, res_prec[:, ii], alpha=0.05, color=np.random.rand(3))
+    axs[0].axvline(x=interp_min, color='red', linestyle='--')
+    axs[0].axvline(x=interp_max, color='red', linestyle='--')
+    if set_title:
+        axs[0].set_title(f"Residual Precision") 
+    axs[0].grid(True)
+
+    for ii in range(res_acc.shape[1]):
+        axs[1].scatter(x, res_acc[:, ii], alpha=0.05, color=np.random.rand(3))
+    axs[1].plot(x, bias, label='Bias', color='red')
+    axs[1].axvline(x=interp_min, color='red', linestyle='--')
+    axs[1].axvline(x=interp_max, color='red', linestyle='--')
+    if set_title:
+        axs[1].set_title(f"Residual Accuracy")
+    axs[1].legend()
+    axs[1].set_xlabel("x")
+    axs[1].grid(True)
+
+    label_subplots(axs)
+    plt.tight_layout()
+    
+    if save_dir:
+        save_plot(save_dir, "residual_scatter_vs_x")
+    if block:
+        plt.show()
+    plt.close()
+
+def plot_mean_prediction(x_t_np, y_t_np, mean, std, preds, x_c_np, y_c_np, x_c_min, x_c_max, is_stoch=True, title=None, save_dir=None, block=False, zoom=False):
+    plt.figure(figsize=iclr_figsize(layout="single"))
+    if is_stoch:
+        for ii in range(preds.shape[0]):
+            plt.scatter(x_t_np, preds[ii, :], alpha=0.05, color=np.random.rand(3))
+
+    plt.plot(x_t_np, y_t_np, label="Ground Truth", linestyle="--")
+    plt.plot(x_t_np, mean, label=r"$\mu_{\hat{y}}$")
+
+    if is_stoch:
+        plt.fill_between(x_t_np, mean - std, mean + std, alpha=0.3, label=r"$\pm \sigma_{\hat{y}}$")
+
+    plt.scatter(x_c_np, y_c_np, color="red", label="Training Points", alpha=0.5)
+    plt.axvline(x=x_c_min, color='red', linestyle='--')
+    plt.axvline(x=x_c_max, color='red', linestyle='--')
+    if zoom:
+        plt.ylim([y_t_np.min()-1, y_t_np.max()+1])
+    if title is not None:
+        plt.title(r"$\mu$ vs $x$")
+    plt.xlabel(r"$x$")
+    plt.ylabel(r"$\mu_{\hat{y}}$")
+    plt.legend()
+    plt.grid(True)
+    if save_dir:
+        save_plot(save_dir, "zoomed_mean_vs_x" if zoom else "mean_vs_x")
+    if block:
+        plt.show()
+    plt.close()
+
+
+
+def plot_metric_vs_x(x, metric, metric_label, ind_train, interp_min, interp_max, save_name=None, title=None, save_dir=None, block=False):
+    plt.figure(figsize=iclr_figsize(layout="single"))
+    plt.plot(x, metric, color="black")
+    plt.scatter(x[ind_train], metric[ind_train], label="Training Points", color="red", s=10)
+    plt.axvline(x=interp_min, color='red', linestyle='--')
+    plt.axvline(x=interp_max, color='red', linestyle='--')
+    title = metric_label + r" vs $x$" if title is not None else title
+    if title is not None:
+        plt.title(title)
+    plt.xlabel(r"$x$")
+    plt.ylabel(metric_label)
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    if save_dir:
+        save_name = metric_label if save_name is None else save_name
+        save_plot(save_dir, save_name)
+    if block:
+        plt.show()
+    plt.close()  
+
+
+def plot_two_panel_metric_vs_x(
+    x,
+    metrics,          # list of arrays to plot, length = 2
+    ind_train=None,       # indices for training points (optional)
+    interp_min=None,
+    interp_max=None,
+    ylabels=None,     # list of y-axis labels, length = 2
+    titles=None,      # list of subplot titles (optional)
+    save_dir=None,
+    fname="two_panel_plot",
+    block=False
+):
+    """
+    Generic two-panel plotter.
+
+    Args:
+        x (array): x-axis values
+        metrics (list of arrays): [metric1, metric2], each of length len(x)
+        ind_c (array or None): training indices for scatter overlay
+        interp_min, interp_max (float or None): vertical lines for interpolation region
+        ylabels (list of str): y-axis labels for the two panels
+        titles (list of str): optional subplot titles
+        save_dir (str or None): directory to save figure
+        fname (str): filename stem
+        block (bool): if True, blocks plt.show()
+    """
+    assert len(metrics) == 2, "Must provide exactly two metrics"
+    if ylabels is None:
+        ylabels = ["Metric 1", "Metric 2"]
+
+    _, axs = plt.subplots(2, 1, figsize=iclr_figsize(layout="stacked"), sharex=True)
+
+    for i, ax in enumerate(axs):
+        y = metrics[i]
+        ax.plot(x, y, color="black", lw=1.5)
+
+        if ind_train is not None:
+            ax.scatter(x[ind_train], y[ind_train], label="Training Points",
+                       color="red", s=10)
+
+        if interp_min is not None and interp_max is not None:
+            ax.axvline(x=interp_min, color="red", linestyle="--")
+            ax.axvline(x=interp_max, color="red", linestyle="--")
+
+        if titles is not None:
+            ax.set_title(titles[i])
+
+        ax.set_ylabel(ylabels[i])
+        ax.grid(True)
+
+    axs[-1].set_xlabel(r"$x$")
+    axs[-1].legend()
+
+    label_subplots(axs)
+    plt.tight_layout()
+
+    if save_dir:
+        save_plot(save_dir, fname)
+    if block:
+        plt.show()
+    plt.close()
+
+
+# Single Task Plots: Calibration Plots===============================================================================================
+
+def metric_heatmap(metric, grid, x, y, x_min, x_max, save_name, title=None, save_dir=None, block=False):
+    """
+    Metric heatmap (used for the pdf and nll heatmap plots)
+    """
+
+    metric = metric.T
+    y_plt = y[(y<=grid.max()) & (y >= grid.min())]
+    x_plt = x[(y<=grid.max()) & (y >= grid.min())]
+    
+    plt.figure(figsize=iclr_figsize(layout="single"))
+    plt.imshow(metric, aspect='auto', origin='lower',
+               extent=[x.min(), x.max(), grid.min(), grid.max()],
+               cmap='viridis')
+    plt.colorbar()
+    plt.plot(x_plt,y_plt,c="red")
+    plt.axvline(x=x_min, color='black', linestyle='--')
+    plt.axvline(x=x_max, color='black', linestyle='--')
+    if title is not None:
+        plt.title(title)
+    plt.xlabel(r"$x$")
+    plt.ylabel(r"$y$")
+    plt.ticklabel_format(style='plain')
+    plt.tight_layout()
+    if save_dir:
+        save_plot(save_dir, save_name)
+    if block:
+        plt.show()
+    plt.close() 
+
+def plot_pit_two_panel(
+    x,
+    y_true,
+    preds,                      # (S,N) or (S,N,1)
+    ind_interp,                 # indices or boolean mask (N,)
+    ind_extrap,                 # indices or boolean mask (N,)
+    ind_test,                   # indices or boolean mask (N,)
+    ind_train,                  # indices or boolean mask (N,)
+    interp_min=None,            # optional shading
+    interp_max=None,
+    randomized=True,
+    trend=True,                 # draw running median + 10–90% band
+    trend_window=None,          # None -> auto
+    save_dir=None,
+    fname="pit_two_panel",
+    block=False,
+    set_title=None
+):
+    """
+    Two-panel PIT vs x: left = test interpolation, right = test extrapolation.
+    Returns dict with summary stats for each panel.
+    """
+    x = np.squeeze(np.asarray(x))
+    y_true = np.squeeze(np.asarray(y_true))
+    N = x.shape[0]
+
+    ii = _to_index(ind_interp, N)
+    ie = _to_index(ind_extrap, N)
+    it = _to_index(ind_test,   N)
+    ir = _to_index(ind_train,  N)
+
+    it_i = np.intersect1d(it, ii)   # test ∩ interp
+    it_e = np.intersect1d(it, ie)   # test ∩ extrap
+
+    # PIT for all points (so we can also show training for context)
+    u_all = _compute_pit_from_mc(y_true, preds, randomized=randomized)
+    stats = {}
+
+    # convenience sorter
+    def sorted_subset(idx):
+        order = np.argsort(x[idx])
+        return x[idx][order], u_all[idx][order], idx[order]
+
+    panels = [
+        ("PIT vs x — Test Interpolation", it_i, "red"),
+        ("PIT vs x — Test Extrapolation", it_e, "blue"),
+    ]
+
+    fig, axes = plt.subplots(1, 2, figsize=iclr_figsize(layout="double"))
+    for k, (title, idx, color) in enumerate(panels):
+        ax = axes[k]
+        ax = plt.subplot(1, 2, k+1)
+
+        xs, us, idx_sorted = sorted_subset(idx)
+        x_tr, u_tr = x[ir], u_all[ir]
+
+        # refs
+        ax.axhline(0.5, color='gray', linestyle='--', linewidth=1, alpha=0.9)
+        ax.axhline(0.1, color='gray', linestyle=':', linewidth=1, alpha=0.6)
+        ax.axhline(0.9, color='gray', linestyle=':', linewidth=1, alpha=0.6)
+
+        if interp_min is not None and interp_max is not None:
+            ax.axvspan(interp_min, interp_max, color='C1', alpha=0.08, lw=0)
+
+        # scatter
+        ax.scatter(xs, us, s=14, alpha=0.85, c=color,
+                   label=f"{'Interp' if k==0 else 'Extrap'} Test (N={len(us)})")
+        ax.scatter(x_tr, u_tr, s=12, alpha=0.5, facecolors='none', edgecolors='green',
+                   label="Training points")
+
+        # trend
+        if trend and len(us) >= 5:
+            q50, q10, q90 = _rolling_quantiles(xs, us, window=trend_window)
+            ax.plot(xs, q50, lw=2, color=color, alpha=0.9, label="running median")
+            ax.fill_between(xs, q10, q90, color=color, alpha=0.15, linewidth=0,
+                            label="10–90% band")
+        else:
+            q50 = np.median(us); q10 = np.quantile(us,0.10); q90 = np.quantile(us,0.90)
+
+        # axes & labels
+        ax.set_xlim(np.min(x), np.max(x))
+        ax.set_ylim(0.0, 1.0)
+        ax.set_xlabel(r"$x$")
+        ax.set_ylabel(r"$u = \hat F_x(y)$")
+        if set_title is not None:
+            ax.set_title(title)
+        ax.grid(True, alpha=0.3)
+        ax.legend(frameon=False)
+
+        # summary stats for this panel
+        med = float(np.median(us)) if len(us)>0 else np.nan
+        q10g = float(np.quantile(us, 0.10)) if len(us)>0 else np.nan
+        q90g = float(np.quantile(us, 0.90)) if len(us)>0 else np.nan
+        band = q90g - q10g if len(us)>0 else np.nan
+        pval, ks = _uniformity_p(us)
+        stats["interp" if k==0 else "extrap"] = {
+            "N": int(len(us)),
+            "median": med,
+            "median_delta": med - 0.5,   # bias (ideal 0)
+            "q10": q10g,
+            "q90": q90g,
+            "band_10_90": band,          # ideal ≈ 0.8
+            "ks_pvalue": pval,           # None if SciPy not installed
+            "ks_stat": ks,
+        }
+
+    label_subplots(axes)
+    plt.tight_layout()
+
+    if save_dir:
+        save_plot(save_dir, fname)
+    if block:
+        plt.show()
+    plt.close()
+
+def plot_y_vs_x_2x2(x, y, xlabel, ylabel, fname, ind_interp, ind_extrap, ind_test, ind_train, set_title=None, db_scale=True, save_dir=None, block=False):
+    ind_test_interp = np.intersect1d(ind_test, ind_interp)
+    fig, axes = plt.subplots(2, 2, figsize=iclr_figsize(layout="2x2"), sharex=True, sharey=True)
+    titles = ["Test Points", "Training Points", "Test Interpolation Points", "Test Extrapolation Points"]
+    indices = [ind_test, ind_train, ind_test_interp, ind_extrap]
+    colors = ["red", "green", "blue", "orange"]
+
+    for ax, title, idx, color in zip(axes.flat, titles, indices, colors):
+        ax.scatter(x[idx], y[idx],
+                   alpha=1.0, s=10, c=color)
+        if set_title is not None:
+            ax.set_title(title)
+        ax.grid(True)
+    
+    label_subplots(axes)
+    if set_title is not None:
+        fig.suptitle(f"{ylabel} vs {xlabel}", fontsize=16)
+    xlabel = xlabel + r" $(dB)$" if db_scale and xlabel != r"$- \log\left( p(y_{\text{truth}} \mid x) \right)$" else xlabel
+    ylabel = ylabel + r" $(dB)$" if db_scale and ylabel != r"$- \log\left( p(y_{\text{truth}} \mid x) \right)$" else ylabel
+    fig.supxlabel(xlabel)
+    fig.supylabel(ylabel)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])  # leave space for suptitle
+    if save_dir:
+        save_plot(save_dir, fname)
+    if block:
+        plt.show()
+    plt.close()
+
+def plot_y_vs_x(x, y, xlabel, ylabel, fname, ind_interp, ind_extrap, ind_test, ind_train, db_scale, set_title=None, save_dir=None, block=False):
+    ind_test_interp = np.intersect1d(ind_test, ind_interp)
+    plt.figure(figsize=iclr_figsize(layout="single"))
+    plt.scatter(x[ind_test_interp], y[ind_test_interp], alpha=1.0, s=10, c="red", label="Test Interpolation Points")
+    plt.scatter(x[ind_extrap], y[ind_extrap], alpha=1.0, s=10, c="blue", label="Test Extrapolation Points")
+    plt.scatter(x[ind_train], y[ind_train], alpha=1.0, s=10, c="green", label="Training Points")
+    if set_title is not None:
+        plt.title(f"{ylabel} vs {xlabel}")
+    xlabel = xlabel + r" $(dB)$" if db_scale and xlabel != r"$- \log\left( p(y_{\text{truth}} \mid x) \right)$" else xlabel
+    ylabel = ylabel + r" $(dB)$" if db_scale and ylabel != r"$- \log\left( p(y_{\text{truth}} \mid x) \right)$" else ylabel
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    if save_dir:
+        save_plot(save_dir, fname)
+    if block:
+        plt.show()
+    plt.close()
+
+
+
+
+
 
 
 # Overlay Plots================================================================================================================
 
 def plot_single_task_overlay(
-    seed,
-    date_time,
+    path,
     model_types,
     stoch_models,
     stoch_metrics,
     model_colors,
-    save_dir=None,
+    save_path=None,
     show_figs=False,
-    use_db_scale=True
+    use_db_scale=True,
+    plot_types=[]
 ):
+    # Load path
+    load_path = path
+    # Save path
+    save_path = os.path.join(path, 'overlay_plots')
     # Re-load data
-    loaders, metrics, losses, summary, x_train, y_train, x_test, y_test, ind_train, ind_test, ind_interp, ind_extrap, seed_date_time_list = single_task_overlay_loader([seed], date_time)
+    loaders, metrics, losses, summary, x_train, y_train, x_test, y_test, ind_train, ind_test, ind_interp, ind_extrap, seed_date_time_list = single_task_overlay_loader([load_path])
     
+    # If plot_types is empty plot everything
+    plot_all = True if len(plot_types) == 0 else False
+
     for seed_date_time in seed_date_time_list:
         x = x_test[seed_date_time]
         y = y_test[seed_date_time]
@@ -719,7 +646,7 @@ def plot_single_task_overlay(
             stoch = metric_label in stoch_metrics
             models = sorted(stoch_models.intersection(model_types)) if stoch else sorted(model_types)
 
-            fig, ax = plt.subplots(figsize=(10, 8))
+            fig, ax = plt.subplots(figsize=iclr_figsize(layout="single"))
             metric_min, metric_max = None, None
 
             for model in models:
@@ -750,22 +677,21 @@ def plot_single_task_overlay(
             ax.grid(True)
             ax.legend()
             fig.tight_layout()
-            if save_dir:
-                save_plot(os.path.join(save_dir, 'metric_vs_x'), f"{metric_label}_vs_x")
+            if save_path:
+                save_plot(os.path.join(save_path, 'metric_vs_x'), f"{metric_label}_vs_x")
             if show_figs:
                 plt.show()
             plt.close()
 
         # --- Loss Plots ---
         for label in losses:
-            fig, ax = plt.subplots(figsize=(10, 8))
+            fig, ax = plt.subplots(figsize=iclr_figsize(layout="single"))
             value_max = None
 
             for model in model_types:
                 if (model not in stoch_models and label in {"kls", "losses", "betas"}) or (model == "DeepEnsembleNet" and label in {"kls", "betas"}):
                     continue
                 
-
                 value = losses[label][seed_date_time][model]
                 ax.plot(np.arange(1, len(value)+1), value, label=model, color=model_colors.get(model, None))
                 value_max = np.max(value) if value_max is None else max(value_max, np.max(value))
@@ -777,8 +703,8 @@ def plot_single_task_overlay(
             ax.grid(True)
             ax.legend()
             fig.tight_layout()
-            if save_dir:
-                save_plot(os.path.join(save_dir, 'loss_vs_epoch'), f"{label}_vs_epoch")
+            if save_path:
+                save_plot(os.path.join(save_path, 'loss_vs_epoch'), f"{label}_vs_epoch")
             if show_figs:
                 plt.show()
             plt.close()
@@ -786,7 +712,7 @@ def plot_single_task_overlay(
         # --- Scatter Plots ---
         def scatter_plot(x, y, xlabel, ylabel, fname, model_colors, title=None):
             title = title = f"{ylabel} vs {xlabel}".replace(" (dB)", "")
-            fig = plt.figure(figsize=(10, 8))
+            fig = plt.figure(figsize=iclr_figsize(layout="single"))
             for model in sorted(stoch_models.intersection(model_types)):
                 plt.scatter(x[model], y[model], s=10, alpha=0.7, label=model, color=model_colors.get(model, None))
             plt.xlabel(xlabel)
@@ -795,8 +721,8 @@ def plot_single_task_overlay(
             plt.grid(True)
             plt.legend()
             plt.tight_layout()
-            if save_dir:
-                save_plot(os.path.join(save_dir, 'calibration_scatter_plots'), fname)
+            if save_path:
+                save_plot(os.path.join(save_path, 'calibration_scatter_plots'), fname)
             if show_figs:
                 plt.show()
             plt.close()
@@ -859,7 +785,7 @@ def plot_single_task_overlay(
                 xlabel=xlabel,
                 ylabel=ylabel,
                 model_colors=model_colors,
-                save_dir=os.path.join(save_dir, 'calibration_scatter_plots') if save_dir else None,
+                save_dir=os.path.join(save_path, 'calibration_scatter_plots') if save_path else None,
                 fname=fname_2x2,
                 show_figs=show_figs
             )
@@ -891,7 +817,7 @@ def overlay_scatter_2x2(
     title, xlabel, ylabel,
     model_colors, save_dir=None, fname=None, show_figs=True
 ):
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10), sharex=True, sharey=True)
+    fig, axes = plt.subplots(2, 2, figsize=iclr_figsize(layout="2x2"), sharex=True, sharey=True)
     ax_map = {
         "Test": axes[0,0],
         "Train": axes[0,1],
@@ -940,6 +866,103 @@ def overlay_scatter_2x2(
 
 
 #####################################################
+
+def plot_coverage_two_panel(
+    preds_by_model,   # dict: {model_name: preds (S,N) or (S,N,1)}
+    y_true,           # (N,)
+    ind_interp, ind_extrap, ind_test,   # idx arrays or boolean masks
+    levels=(0.5, 0.6, 0.7, 0.8, 0.9, 0.95),
+    set_title=None,
+    model_colors=None,                  # dict model->color
+    save_dir=None, fname="coverage_two_panel",
+    block=False, show_ci=True
+):
+    """
+    Two-panel nominal vs empirical coverage overlay across models.
+      Left  : test ∩ interpolation
+      Right : test ∩ extrapolation
+    """
+    y = np.squeeze(np.asarray(y_true))
+    N = y.shape[0]
+
+    def _to_index_local(idx_like, N):
+        arr = np.asarray(idx_like)
+        if arr.dtype == bool:
+            assert arr.shape[0] == N, "boolean mask must match N"
+            return np.flatnonzero(arr)
+        return arr.astype(int)
+
+    ii = _to_index_local(ind_interp, N)
+    ie = _to_index_local(ind_extrap, N)
+    it = _to_index_local(ind_test,   N)
+
+    it_i = np.intersect1d(it, ii)   # test ∩ interp
+    it_e = np.intersect1d(it, ie)   # test ∩ extrap
+
+    # Container for stats you can dump into a table/caption
+    stats = {"interp": {}, "extrap": {}}
+
+    panels = [("Interpolation", it_i), ("Extrapolation", it_e)]
+    fig, axes = plt.subplots(1, 2, figsize=iclr_figsize(layout="double"), sharex=True, sharey=True)
+
+    for ax, (panel_name, idx) in zip(axes, panels):
+        # diagonal (ideal)
+        ax.plot([levels[0], levels[-1]], [levels[0], levels[-1]], "k--", lw=1, label="Ideal")
+        for mname, P in preds_by_model.items():
+            P = np.squeeze(np.asarray(P))
+            assert P.ndim == 2, f"{mname}: preds must be (S,N) or (S,N,1)"
+            S, Np = P.shape
+            assert Np == N, f"{mname}: N mismatch"
+
+            # subset to panel points
+            if idx.size == 0:
+                continue
+            P_sub = P[:, idx]
+            y_sub = y[idx]
+
+            cov = coverage_curve_from_samples(P_sub, y_sub, levels=levels)
+            emp = cov["empirical"]                # (K,)
+            K = len(emp)
+            color = model_colors.get(mname, None) if model_colors else None
+            ax.plot(levels, emp, marker='o', lw=2, label=mname, color=color)
+
+            # binomial CI (normal approx). Optional but handy.
+            if show_ci:
+                n = float(len(y_sub))
+                se = np.sqrt(np.maximum(emp*(1-emp)/np.maximum(n,1.0), 1e-12))
+                ax.fill_between(levels, emp - 1.96*se, emp + 1.96*se,
+                                alpha=0.12, linewidth=0, color=color)
+
+            # stash stats
+            stats_key = "interp" if panel_name == "Interpolation" else "extrap"
+            stats[stats_key][mname] = {
+                "N": int(len(y_sub)),
+                "levels": np.array(levels, dtype=float),
+                "empirical": np.array(emp, dtype=float)
+            }
+        if set_title is not None:
+            ax.set_title(f"Coverage vs Nominal — {panel_name}")
+        ax.set_xlabel("Nominal coverage (α)")
+        ax.set_ylabel("Empirical coverage")
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim(levels[0], levels[-1])
+        ax.set_ylim(levels[0], levels[-1])
+
+    # one legend
+    handles, labels = axes[0].get_legend_handles_labels()
+    if len(handles) == 0:   # models added on the right axis only
+        handles, labels = axes[1].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc="lower center", ncol=min(4, len(labels)))
+        fig.subplots_adjust(bottom=0.2)
+
+    label_subplots(axes)
+    fig.tight_layout()
+    if save_dir:
+        save_plot(save_dir, fname)
+    if block:
+        plt.show()
+    plt.close(fig)
 
 def _to_index(idx_like, N):
     idx_like = np.asarray(idx_like)

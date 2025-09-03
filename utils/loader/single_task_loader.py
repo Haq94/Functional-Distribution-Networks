@@ -6,28 +6,14 @@ import numpy as np
 from utils.general import get_latest_run_dir, extract_seed_from_dir, extract_timestamp_from_dir, get_all_experiment_runs, get_seed_time_pairs_for_models
 
 class SingleTaskExperimentLoader:
-    def __init__(self, model_type, seed, date_time, base_dir="results/single_task_experiment"):
-        """
-        Utility to load metrics, losses, summaries, and input/output data.
+    def __init__(self, run_path):
+        self.run_path = run_path
+        self.analysis_path = os.path.join(run_path, "analysis")
 
-        Args:
-            model_type (str): Name of the model used (e.g., 'IC_FDNet').
-            seed (int): Seed for the experiment.
-            date_time (str): Timestamp string in format 'YYYY-MM-DD_HH-MM-SS'.
-            base_dir (str): Root directory where results are saved.
-        """
-        self.model_type = model_type
-        self.seed = seed
-        self.date_time = date_time
-        self.base_dir = base_dir
+    @classmethod
+    def from_path(cls, model_dir):
+        return cls(model_dir)
 
-        # Reformat date for folder name
-        self.date_time_folder = date_time.replace("-", "_")
-        self.seed_folder = f"seed{seed}"
-        
-        # New path structure
-        self.run_path = os.path.join(base_dir, self.date_time_folder, self.seed_folder, model_type)
-        self.analysis_path = os.path.join(self.run_path, "analysis")
 
     def load_summary(self):
         path = os.path.join(self.run_path, "metrics.json")
@@ -131,26 +117,22 @@ def get_all_experiment_runs(base_dir="results/single_task_experiment"):
 
 
 
-def single_task_overlay_loader(seeds, date_times):
+
+def single_task_overlay_loader(save_paths):
     """
-    Load metrics, losses, summaries, and data across models for given seeds and date_times.
+    Load metrics, losses, summaries, and data across models for given experiment save paths.
 
     Args:
-        seeds (list of int): Seeds to include.
-        date_times (list of str): Date-time strings in 'YYYY-MM-DD_HH-MM-SS' format.
+        save_paths (list of str): List of experiment directories, e.g.
+            ["results/single_task_experiment/run1", "results/single_task_experiment/run2"]
 
     Returns:
-        loaders, metrics, losses, summary, x_train, y_train, x_test, y_test, seed_date_time_list
+        loaders, metrics, losses, summary, x_train, y_train, x_test, y_test,
+        ind_train, ind_test, ind_interp, ind_extrap, run_list
     """
-    # List of models to load
-    model_types = ['LP_FDNet', 'HyperNet', 'IC_FDNet', 'BayesNet', 'GaussHyperNet', 'MLPNet', 'DeepEnsembleNet']
+    model_types = ['LP_FDNet', 'HyperNet', 'IC_FDNet',
+                   'BayesNet', 'GaussHyperNet', 'MLPNet', 'MLPDropoutNet', 'DeepEnsembleNet']
 
-    # Load all available runs and filter
-    runs_list = get_all_experiment_runs(base_dir="results/single_task_experiment")
-    seed_date_time_all = get_seed_time_pairs_for_models(runs=runs_list, model_type_list=model_types)
-    seed_date_time_list = [(s, t) for s, t in seed_date_time_all if s in seeds and t in date_times.replace('_','-')]
-
-    # Initialize data containers
     loaders = {}
     x_train, y_train, x_test, y_test = {}, {}, {}, {}
     ind_test, ind_train, ind_interp, ind_extrap = {}, {}, {}, {}
@@ -159,65 +141,170 @@ def single_task_overlay_loader(seeds, date_times):
         "mean", "var", "std", "res_precision", "res_accuracy",
         "bias", "mse", "bias_var_diff", "nlpd_kde", "nlpd_hist", "crps"
     ]}
-
     losses = {name: {} for name in ["losses", "mses", "kls", "betas"]}
-
     summary = {name: {} for name in [
-        'desc', 'model', 'seed', 'rmse', 'mean_nlpd', 'training_time', 'timestamp',
-        'epochs', 'beta_param_dict', 'x_min', 'x_max', 'region_interp', 'frac_train'
+        'desc', 'model', 'rmse', 'mean_nlpd', 'training_time',
+        'epochs', 'beta_param_dict', 'x_min', 'x_max',
+        'region_interp', 'frac_train'
     ]}
 
-    for seed, date_time in seed_date_time_list:
-        for model in model_types:
-            run_tag = f"{model}_seed{seed}_{date_time}"
-            try:
-                loader = SingleTaskExperimentLoader(model, seed, date_time)
+    run_list = []
 
-                # Load metrics
-                metric_dict = loader.load_metrics()
-                for k in metrics:
-                    metrics[k].setdefault((seed, date_time), {})[model] = metric_dict.get(k)
+    for save_path in save_paths:
+        run_list.append(save_path)
+        loaders[save_path] = {}
 
-                # Load loss curve
-                loss_dict = loader.load_loss_curve()
-                for k in losses:
-                    losses[k].setdefault((seed, date_time), {})[model] = loss_dict.get(k)
-
-                # Load summary
-                summary_dict = loader.load_summary()
-                for k in summary:
-                    summary[k].setdefault((seed, date_time), {})[model] = summary_dict.get(k)
-
-                # Store loader
-                loaders.setdefault((seed, date_time), {})[model] = loader
-
-            except FileNotFoundError:
-                print(f"Skipping missing result: {run_tag}")
-            except Exception as e:
-                print(f"Error loading {run_tag}: {e}")
-            finally:
-                print(f"Checked: {run_tag}")
-
-        # Load data once per (seed, date_time)
+    for model in model_types:
+        model_dir = os.path.join(save_path, model)
         try:
-            loader = loaders.get((seed, date_time), {}).get(model_types[0])  # Any model should have data
+            loader = SingleTaskExperimentLoader.from_path(model_dir)
+
+            # Load metrics
+            metric_dict = loader.load_metrics()
+
+            for k in metrics:
+                metrics[k].setdefault(save_path, {})[model] = metric_dict.get(k)
+
+            # Load loss curve
+            loss_dict = loader.load_loss_curve()
+            for k in losses:
+                losses[k].setdefault(save_path, {})[model] = loss_dict.get(k)
+
+            # Load summary
+            summary_dict = loader.load_summary()
+            for k in summary:
+                summary[k].setdefault(save_path, {})[model] = summary_dict.get(k)
+
+            # Store loader
+            loaders[save_path][model] = loader
+
+        except FileNotFoundError:
+            print(f"Skipping missing results: {model_dir}")
+        except Exception as e:
+            print(f"Error loading {model_dir}: {e}")
+        finally:
+            print(f"Checked: {model_dir}")
+
+        # Load data/indices once per save_path (any model folder should have them)
+        try:
+            loader = loaders[save_path].get(model_types[0])
             if loader:
                 data = loader.load_data()
-                x_train[(seed, date_time)] = data["x_train"]
-                y_train[(seed, date_time)] = data["y_train"]
-                x_test[(seed, date_time)] = data["x_test"]
-                y_test[(seed, date_time)] = data["y_test"]
+                x_train[save_path] = data["x_train"]
+                y_train[save_path] = data["y_train"]
+                x_test[save_path] = data["x_test"]
+                y_test[save_path] = data["y_test"]
 
                 ind = loader.load_ind()
-                ind_train[(seed, date_time)] = ind["ind_train"]
-                ind_test[(seed, date_time)] = ind["ind_test"]
-                ind_interp[(seed, date_time)] = ind["ind_interp"]
-                ind_extrap[(seed, date_time)] = ind["ind_extrap"]
+                ind_train[save_path] = ind["ind_train"]
+                ind_test[save_path] = ind["ind_test"]
+                ind_interp[save_path] = ind["ind_interp"]
+                ind_extrap[save_path] = ind["ind_extrap"]
 
         except Exception as e:
-            print(f"Failed to load data for {seed}_{date_time}: {e}")
+            print(f"Failed to load data for {save_path}: {e}")
 
-    print("Loaded runs:", list(loaders.keys()))
+    print("Loaded runs:", run_list)
 
-    return loaders, metrics, losses, summary, x_train, y_train, x_test, y_test, ind_train, ind_test, ind_interp, ind_extrap, seed_date_time_list
+    return (loaders, metrics, losses, summary,
+            x_train, y_train, x_test, y_test,
+            ind_train, ind_test, ind_interp, ind_extrap,
+            run_list)
+
+
+
+
+
+
+# OLD CODE==================================================================================================================
+
+# def single_task_overlay_loader(seeds, date_times):
+#     """
+#     Load metrics, losses, summaries, and data across models for given seeds and date_times.
+
+#     Args:
+#         seeds (list of int): Seeds to include.
+#         date_times (list of str): Date-time strings in 'YYYY-MM-DD_HH-MM-SS' format.
+
+#     Returns:
+#         loaders, metrics, losses, summary, x_train, y_train, x_test, y_test, seed_date_time_list
+#     """
+#     # List of models to load
+#     model_types = ['LP_FDNet', 'HyperNet', 'IC_FDNet', 'BayesNet', 'GaussHyperNet', 'MLPNet', 'DeepEnsembleNet']
+
+#     # Load all available runs and filter
+#     runs_list = get_all_experiment_runs(base_dir="results/single_task_experiment")
+#     seed_date_time_all = get_seed_time_pairs_for_models(runs=runs_list, model_type_list=model_types)
+#     seed_date_time_list = [(s, t) for s, t in seed_date_time_all if s in seeds and t in date_times.replace('_','-')]
+
+#     # Initialize data containers
+#     loaders = {}
+#     x_train, y_train, x_test, y_test = {}, {}, {}, {}
+#     ind_test, ind_train, ind_interp, ind_extrap = {}, {}, {}, {}
+
+#     metrics = {name: {} for name in [
+#         "mean", "var", "std", "res_precision", "res_accuracy",
+#         "bias", "mse", "bias_var_diff", "nlpd_kde", "nlpd_hist", "crps"
+#     ]}
+
+#     losses = {name: {} for name in ["losses", "mses", "kls", "betas"]}
+
+#     summary = {name: {} for name in [
+#         'desc', 'model', 'seed', 'rmse', 'mean_nlpd', 'training_time', 'timestamp',
+#         'epochs', 'beta_param_dict', 'x_min', 'x_max', 'region_interp', 'frac_train'
+#     ]}
+
+#     for seed, date_time in seed_date_time_list:
+#         for model in model_types:
+#             run_tag = f"{model}_seed{seed}_{date_time}"
+#             try:
+#                 loader = SingleTaskExperimentLoader(model, seed, date_time)
+
+#                 # Load metrics
+#                 metric_dict = loader.load_metrics()
+#                 for k in metrics:
+#                     metrics[k].setdefault((seed, date_time), {})[model] = metric_dict.get(k)
+
+#                 # Load loss curve
+#                 loss_dict = loader.load_loss_curve()
+#                 for k in losses:
+#                     losses[k].setdefault((seed, date_time), {})[model] = loss_dict.get(k)
+
+#                 # Load summary
+#                 summary_dict = loader.load_summary()
+#                 for k in summary:
+#                     summary[k].setdefault((seed, date_time), {})[model] = summary_dict.get(k)
+
+#                 # Store loader
+#                 loaders.setdefault((seed, date_time), {})[model] = loader
+
+#             except FileNotFoundError:
+#                 print(f"Skipping missing result: {run_tag}")
+#             except Exception as e:
+#                 print(f"Error loading {run_tag}: {e}")
+#             finally:
+#                 print(f"Checked: {run_tag}")
+
+#         # Load data once per (seed, date_time)
+#         try:
+#             loader = loaders.get((seed, date_time), {}).get(model_types[0])  # Any model should have data
+#             if loader:
+#                 data = loader.load_data()
+#                 x_train[(seed, date_time)] = data["x_train"]
+#                 y_train[(seed, date_time)] = data["y_train"]
+#                 x_test[(seed, date_time)] = data["x_test"]
+#                 y_test[(seed, date_time)] = data["y_test"]
+
+#                 ind = loader.load_ind()
+#                 ind_train[(seed, date_time)] = ind["ind_train"]
+#                 ind_test[(seed, date_time)] = ind["ind_test"]
+#                 ind_interp[(seed, date_time)] = ind["ind_interp"]
+#                 ind_extrap[(seed, date_time)] = ind["ind_extrap"]
+
+#         except Exception as e:
+#             print(f"Failed to load data for {seed}_{date_time}: {e}")
+
+#     print("Loaded runs:", list(loaders.keys()))
+
+#     return loaders, metrics, losses, summary, x_train, y_train, x_test, y_test, ind_train, ind_test, ind_interp, ind_extrap, seed_date_time_list
 

@@ -239,7 +239,7 @@ class SingleTaskTrainer:
 
     def evaluate(self, x, MC=30, sample=True, return_kl=False):
         self.model.eval()
-        x = x.double().to(self.device)
+        x = x.double().to(self.device) if torch.is_tensor(x) else torch.tensor(x, dtype=torch.float64, device=self.device).view(-1, 1)
         N = x.shape[0]
         preds = []
 
@@ -383,7 +383,7 @@ if __name__=='__main__':
     from models.fdnet import LP_FDNet, IC_FDNet
     from models.hypernet import HyperNet
     from models.bayesnet import BayesNet
-    from models.gausshypernet import GaussianHyperNet
+    from models.gausshypernet import GaussHyperNet
     from models.mlpnet import MLPNet
     from models.mlpdropoutnet import MLPDropoutNet
     from models.deepensemblenet import DeepEnsembleNet
@@ -420,7 +420,7 @@ if __name__=='__main__':
     elif model_type == 'BayesNet':
         model = BayesNet(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=input_dim, prior_std=1.0)
     elif model_type == 'GaussHyperNet':
-        model = GaussianHyperNet(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=input_dim, hyper_hidden_dim=hyper_hidden_dim, latent_dim=latent_dim, prior_std=1.0)
+        model = GaussHyperNet(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=input_dim, hyper_hidden_dim=hyper_hidden_dim, latent_dim=latent_dim, prior_std=1.0)
     elif model_type == 'MLPNet':
         model = MLPNet(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=input_dim, dropout_rate=0.1)
     elif model_type == 'MLPDropoutNet':

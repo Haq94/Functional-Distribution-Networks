@@ -1,5 +1,6 @@
 import os
 import re
+import numpy as np
 
 def get_latest_run_dir(model_type, base_dir="results/single_task_experiment"):
     """
@@ -134,7 +135,29 @@ def count_parameters(model, trainable_only=True):
         return sum(p.numel() for p in model.parameters() if p.requires_grad)
     else:
         return sum(p.numel() for p in model.parameters())
-
-
+    
+def build_model_dict(model_type, **kwargs):
+    model_dict = {}
+    # model_dict['model_type'] = model_type
+    if model_type in {'IC_FDNet', 'LP_FDNet', 'HyperNet'}:
+        model_dict['hidden_dim'] = kwargs.get('hidden_dim', 32)
+        model_dict['hyper_hidden_dim'] = kwargs.get('hyper_hidden_dim', 32)
+    elif model_type == 'BayesNet':
+        model_dict['hidden_dim'] = kwargs.get('hidden_dim', 32)
+    elif model_type == 'GaussHyperNet':
+        model_dict['hidden_dim'] = kwargs.get('hidden_dim', 32)
+        model_dict['hyper_hidden_dim'] = kwargs.get('hyper_hidden_dim', 32)
+        model_dict['latent_dim'] = kwargs.get('latent_dim', 10)
+    elif model_type in {'MLPNet', 'MLPDropoutNet'}:
+        model_dict['hidden_dim'] = kwargs.get('hidden_dim', 32)
+        model_dict['dropout_rate'] = kwargs.get('dropout_rate', 0.1)
+    elif model_type == 'DeepEnsembleNet':
+        model_dict['hidden_dim'] = kwargs.get('hidden_dim', 32)
+        model_dict['dropout_rate'] = kwargs.get('dropout_rate', 0.1)
+        model_dict['num_models'] = kwargs.get('num_models', 5)
+        model_dict['ensemble_seed_list'] = kwargs.get('ensemble_seed_list', [n for n in range(model_dict['num_models'])])
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
+    return model_dict
 
 

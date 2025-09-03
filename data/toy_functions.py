@@ -81,6 +81,78 @@ def generate_grid(input_type=None, input_seed=0, x_min=-10, x_max=10, region_int
         x_r = np.linspace(start=region_interp[1],stop=x_max,num=n_extrap-round(n_extrap/2))
     return np.sort(np.unique(np.concatenate([x_l, x_c, x_r])))
 
+def generate_single_task_splits(
+    x_min: float,
+    x_max: float,
+    region_interp: tuple,
+    n_train: int = 50,
+    n_test: int = 200,
+    n_val: int = 20,
+    val_frac_interp: float = 0.5,
+    seed: int = None
+):
+    """
+    Generate 1D regression train/val/test splits.
+
+    Args:
+        x_min, x_max (float): Global domain bounds for test grid.
+        region_interp (tuple): (interp_min, interp_max), the interpolation region.
+        n_train (int): Number of training points sampled uniformly inside interpolation region.
+        n_test (int): Number of test points on uniform grid from x_min to x_max.
+        n_val (int): Number of validation points.
+        val_frac_interp (float): Fraction of val points from interpolation region (rest from extrapolation).
+        seed (int or None): Random seed for reproducibility.
+
+    Returns:
+        dict with:
+            - x_train: (n_train,) training inputs
+            - x_val: (n_val,) validation inputs
+            - x_test: (n_test,) uniform test grid
+            - region_interp: (interp_min, interp_max)
+            - ind_interp: indices of x_test inside interpolation region
+            - ind_extrap: indices of x_test outside interpolation region
+    """
+    rng = np.random.default_rng(seed)
+
+    interp_min, interp_max = region_interp
+
+    # --- Train ---
+    x_train = rng.uniform(interp_min, interp_max, size=n_train)
+
+    # --- Test (full grid) ---
+    x_test = np.linspace(x_min, x_max, n_test)
+
+    # --- Interp / Extrap masks on test grid ---
+    ind_interp = (x_test >= interp_min) & (x_test <= interp_max)
+    ind_extrap = ~ind_interp
+
+    # --- Validation ---
+    n_val_interp = int(round(val_frac_interp * n_val))
+    n_val_extrap = n_val - n_val_interp
+
+    x_val_interp = rng.uniform(interp_min, interp_max, size=n_val_interp) if n_val_interp > 0 else np.array([])
+    x_val_extrap = rng.uniform(x_min, x_max, size=n_val_extrap)
+    # Ensure extrap only outside interp region
+    if n_val_extrap > 0:
+        mask = (x_val_extrap < interp_min) | (x_val_extrap > interp_max)
+        while not np.all(mask):  # resample until all are out of interp
+            resample = rng.uniform(x_min, x_max, size=mask.sum())
+            x_val_extrap[~mask] = resample
+            mask = (x_val_extrap < interp_min) | (x_val_extrap > interp_max)
+
+    x_val = np.concatenate([x_val_interp, x_val_extrap]) if n_val > 0 else np.array([])
+
+    # --- Bundle ---
+    return {
+        "x_train": np.sort(x_train),
+        "x_val": np.sort(x_val),
+        "x_test": x_test,
+        "region_interp": (interp_min, interp_max),
+        "ind_interp": np.where(ind_interp)[0],
+        "ind_extrap": np.where(ind_extrap)[0],
+    }
+
+
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
