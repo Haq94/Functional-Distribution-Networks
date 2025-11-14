@@ -194,5 +194,12 @@ cython_debug/
 .cursorindexingignore
 
 # Ignore folders
-results/
+.vscode/
+.virtual_documents/
+.anaconda_projects/
+results/*
+!results/2025_09_21_10_20_25/
+!results/2025_09_21_10_20_25/**
+
+
 
