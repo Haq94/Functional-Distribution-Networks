@@ -200,6 +200,7 @@ cython_debug/
 anaconda_projects/
 results/
 
+main2.py
 delete*.py
 
 
