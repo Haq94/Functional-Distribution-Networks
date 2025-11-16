@@ -65,7 +65,9 @@ class BaseExperiment:
                         MC_val=100,
                         MC_test=100,
                         checkpoint_dict=None,
-                        save_switch=False):
+                        save_switch=False,
+                        train_val_metrics=True,
+                        info=None):
         """
         Runs a single experiment with the specified model type and data source.
 
@@ -104,8 +106,15 @@ class BaseExperiment:
         val_data = (x_val, y_val, MC_val)
             
         # === Store data on device ===
-        x_train, y_train = x_train.double().to(self.device), y_train.double().to(self.device)
-        x_test, y_test = x_test.double().to(self.device), y_test.double().to(self.device)
+        x_train = x_train.double().to(self.device) if isinstance(x_train, torch.Tensor) else torch.tensor(x_train, dtype=torch.double, device=self.device)
+        y_train = y_train.double().to(self.device) if isinstance(y_train, torch.Tensor) else torch.tensor(y_train, dtype=torch.double, device=self.device)
+
+        x_val = x_val.double().to(self.device) if isinstance(x_val, torch.Tensor) else torch.tensor(x_val, dtype=torch.double, device=self.device)
+        y_val = y_val.double().to(self.device) if isinstance(y_val, torch.Tensor) else torch.tensor(y_val, dtype=torch.double, device=self.device)
+        
+        x_test = x_test.double().to(self.device) if isinstance(x_test, torch.Tensor) else torch.tensor(x_test, dtype=torch.double, device=self.device)
+        y_test = y_test.double().to(self.device) if isinstance(y_test, torch.Tensor) else torch.tensor(y_test, dtype=torch.double, device=self.device)
+
 
         # === Build model ===
         model = self.build_model(self.model_type, input_dim=x_train.shape[1], output_dim=y_train.shape[1])
@@ -124,10 +133,21 @@ class BaseExperiment:
             self.choose_best_model(trainer, x_val, checkpoint_dict)
 
         # === Evaluate ===
-        preds = trainer.evaluate(x=x_test, MC=MC_test)
+        preds_test = trainer.evaluate(x=x_test, MC=MC_test)
 
         # === Metrics ===
-        metric_outputs = metrics(preds, y_test)
+        metrics_test = metrics(preds_test, y_test)
+
+        # === Evaluate train/ val metrics ===
+        if train_val_metrics:
+            preds_train = trainer.evaluate(x=x_train, MC=MC_test)
+            preds_val = trainer.evaluate(x=x_val, MC=MC_test)
+
+            metrics_train = metrics(preds_train, y_train)
+            metrics_val = metrics(preds_val, y_val)
+        else:
+            metrics_train = None
+            metrics_val = None
 
         # === Save ===
         if save_switch:
@@ -136,22 +156,34 @@ class BaseExperiment:
             # Summary dict
             summary_dict = self._gen_summary_dict(epochs=epochs, data=data, beta_param_dict=beta_param_dict,
                                                   training_time=training_time, trainer=trainer, 
-                                                  metric_outputs=metric_outputs, MC_train=MC_train, 
+                                                  metric_outputs=metrics_test, MC_train=MC_train, 
                                                   MC_val=MC_val, MC_test=MC_test)
             # Save
             base_experiment_saver(model=model,
                                 trainer=trainer,
-                                metric_outputs=metric_outputs,
+                                metrics_train=metrics_train,
+                                metrics_val=metrics_val,
+                                metrics_test=metrics_test,
                                 summary_dict=summary_dict,
                                 x_train=x_train,
                                 y_train=y_train,
+                                x_val=x_val,
+                                y_val=y_val,
                                 x_test=x_test,
                                 y_test=y_test,
-                                save_path=save_path)
+                                save_path=save_path,
+                                info=info)
 
-        return preds, data, training_time, metric_outputs, trainer
+        if train_val_metrics:
+            preds_dict = {'train': preds_train, 'val': preds_val, 'test': preds_test}
+            metrics_dict = {'train': metrics_train, 'val': metrics_val, 'test': metrics_test}
+            return preds_dict, data, training_time, metrics_dict, trainer
+        else:
+            return preds_test, data, training_time, metrics_test, trainer
     
     def choose_best_model(self, trainer, x_val, checkpoint_dict):
+        if len(checkpoint_dict) == 0:
+            return 
         # Checkpoint parameters
         metric_str = checkpoint_dict['metric_str']
         region_interp = checkpoint_dict['region_interp']

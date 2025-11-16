@@ -140,24 +140,45 @@ def build_model_dict(model_type, **kwargs):
     model_dict = {}
     # model_dict['model_type'] = model_type
     if model_type in {'IC_FDNet', 'LP_FDNet', 'HyperNet'}:
-        model_dict['hidden_dim'] = kwargs.get('hidden_dim', 32)
-        model_dict['hyper_hidden_dim'] = kwargs.get('hyper_hidden_dim', 32)
+        model_dict['hidden_dim'] = kwargs.get('hidden_dim', 4)
+        model_dict['hyper_hidden_dim'] = kwargs.get('hyper_hidden_dim', 4)
     elif model_type == 'BayesNet':
-        model_dict['hidden_dim'] = kwargs.get('hidden_dim', 32)
+        model_dict['hidden_dim'] = kwargs.get('hidden_dim', 16)
     elif model_type == 'GaussHyperNet':
-        model_dict['hidden_dim'] = kwargs.get('hidden_dim', 32)
-        model_dict['hyper_hidden_dim'] = kwargs.get('hyper_hidden_dim', 32)
-        model_dict['latent_dim'] = kwargs.get('latent_dim', 10)
+        model_dict['hidden_dim'] = kwargs.get('hidden_dim', 4)
+        model_dict['hyper_hidden_dim'] = kwargs.get('hyper_hidden_dim', 4)
+        model_dict['latent_dim'] = kwargs.get('latent_dim', 1)
     elif model_type in {'MLPNet', 'MLPDropoutNet'}:
         model_dict['hidden_dim'] = kwargs.get('hidden_dim', 32)
         model_dict['dropout_rate'] = kwargs.get('dropout_rate', 0.1)
     elif model_type == 'DeepEnsembleNet':
-        model_dict['hidden_dim'] = kwargs.get('hidden_dim', 32)
+        model_dict['hidden_dim'] = kwargs.get('hidden_dim', 3)
         model_dict['dropout_rate'] = kwargs.get('dropout_rate', 0.1)
-        model_dict['num_models'] = kwargs.get('num_models', 5)
+        model_dict['num_models'] = kwargs.get('num_models', 10)
         model_dict['ensemble_seed_list'] = kwargs.get('ensemble_seed_list', [n for n in range(model_dict['num_models'])])
     else:
         raise ValueError(f"Unknown model type: {model_type}")
     return model_dict
+
+def _crn_seed_int(*parts) -> int:
+    # stable 32-bit seed from tuple of ints/strings
+    s = 0x9E3779B1
+    for p in parts:
+        h = hash(str(p)) & 0xFFFFFFFF
+        s ^= h + 0x9E3779B9 + ((s << 6) & 0xFFFFFFFF) + (s >> 2)
+        s &= 0xFFFFFFFF
+    return int(s)
+
+def set_crn_seed(base_seed: int, *tags, cuda: bool = True):
+    import torch
+    import random
+    seed = _crn_seed_int(base_seed, *tags)
+    torch.manual_seed(seed)
+    np.random.seed(seed % (2**32 - 1))
+    random.seed(seed)
+    if cuda and torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    return seed  # useful for logging
+
 
 

@@ -32,8 +32,8 @@ class GaussHyperLayer(nn.Module):
             w_sigma = torch.exp(w_log_sigma)
             b_sigma = torch.exp(b_log_sigma)
 
-            W = w_mu + w_sigma * torch.randn_like(w_mu)
-            b = b_mu + b_sigma * torch.randn_like(b_mu)
+            W = w_mu + w_sigma * torch.randn_like(w_mu, dtype=w_mu.dtype)
+            b = b_mu + b_sigma * torch.randn_like(b_mu, dtype=b_mu.dtype)
         else:
             W = w_mu
             b = b_mu
@@ -44,8 +44,8 @@ class GaussHyperLayer(nn.Module):
         out = F.linear(x, W, b)
 
         if return_kl:
-            kl_w = compute_kl_divergence(w_mu, w_log_sigma)
-            kl_b = compute_kl_divergence(b_mu, b_log_sigma)
+            kl_w = compute_kl_divergence(w_mu, w_log_sigma, reduction='sum')
+            kl_b = compute_kl_divergence(b_mu, b_log_sigma, reduction='sum')
             return out, kl_w + kl_b
         else:
             return out

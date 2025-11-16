@@ -16,7 +16,7 @@ class SingleTaskExperimentLoader:
 
 
     def load_summary(self):
-        path = os.path.join(self.run_path, "metrics.json")
+        path = os.path.join(self.run_path, "summary.json")
         with open(path, "r") as f:
             return json.load(f)
 
@@ -30,14 +30,15 @@ class SingleTaskExperimentLoader:
             "betas": data["betas"]
         }
 
-    def load_metrics(self):
+    def load_metrics(self, type='test'):
         metrics = {}
         metric_names = [
             "mean", "var", "std", "residual_precision", "residual_accuracy",
             "bias", "mse", "bias_var_diff", "nlpd_kde", "nlpd_hist", "pdf_kde", "pdf_hist", 'crps'
         ]
         for name in metric_names:
-            path = os.path.join(self.analysis_path, f"{name}.npy")
+            name = 'res_prec' if name == 'residual_precision' else 'res_acc' if name == 'residual_accuracy' else name
+            path = os.path.join(self.analysis_path, f"{name}.npy") if type=='test' else os.path.join(self.run_path, 'train_metrics', f"{name}.npy") if type=='train' else os.path.join(self.run_path, 'val_metrics', f"{name}.npy")
             if os.path.exists(path):
                 metrics[name if "residual" not in name else name.replace("residual_", "res_")] = np.load(path)
             else:
@@ -50,19 +51,23 @@ class SingleTaskExperimentLoader:
         return {
             "x_train": data["x_train"],
             "y_train": data["y_train"],
-            "x_test": data["x_test"],
-            "y_test": data["y_test"]
+            "x_val"  : data["x_val"],
+            "y_val"  : data["y_val"],
+            "x_test" : data["x_test"],
+            "y_test" : data["y_test"],
+            "region": data["region"],
+            "region_interp": data["region_interp"]
         }
     
-    def load_ind(self):
-        path = os.path.join(self.analysis_path, "ind.npz")
-        ind = np.load(path)
-        return {
-            "ind_train": ind["ind_train"],
-            "ind_test": ind["ind_test"],
-            "ind_interp": ind["ind_interp"],
-            "ind_extrap": ind["ind_extrap"]
-        }
+    # def load_ind(self):
+    #     path = os.path.join(self.analysis_path, "ind.npz")
+    #     ind = np.load(path)
+    #     return {
+    #         "ind_train": ind["ind_train"],
+    #         "ind_test": ind["ind_test"],
+    #         "ind_interp": ind["ind_interp"],
+    #         "ind_extrap": ind["ind_extrap"]
+    #     }
 
     @staticmethod
     def get_latest_loader(model_type, base_dir="results/single_task_experiment"):
@@ -134,81 +139,75 @@ def single_task_overlay_loader(save_paths):
                    'BayesNet', 'GaussHyperNet', 'MLPNet', 'MLPDropoutNet', 'DeepEnsembleNet']
 
     loaders = {}
-    x_train, y_train, x_test, y_test = {}, {}, {}, {}
-    ind_test, ind_train, ind_interp, ind_extrap = {}, {}, {}, {}
+    x_train, y_train, x_val, y_val, x_test, y_test, region, region_interp = {}, {}, {}, {}, {}, {}, {}, {}
 
-    metrics = {name: {} for name in [
-        "mean", "var", "std", "res_precision", "res_accuracy",
-        "bias", "mse", "bias_var_diff", "nlpd_kde", "nlpd_hist", "crps"
-    ]}
-    losses = {name: {} for name in ["losses", "mses", "kls", "betas"]}
-    summary = {name: {} for name in [
-        'desc', 'model', 'rmse', 'mean_nlpd', 'training_time',
-        'epochs', 'beta_param_dict', 'x_min', 'x_max',
-        'region_interp', 'frac_train'
-    ]}
+    metrics = {}; metrics_train = {}; metrics_val = {}; losses = {}; summary = {}
 
     run_list = []
 
     for save_path in save_paths:
         run_list.append(save_path)
-        loaders[save_path] = {}
+        for d in (loaders, metrics, metrics_train,  metrics_val, losses, summary, x_train, y_train, x_val, y_val, x_test, y_test):
+            d[save_path] = {}
 
-    for model in model_types:
-        model_dir = os.path.join(save_path, model)
-        try:
-            loader = SingleTaskExperimentLoader.from_path(model_dir)
+        for model in model_types:
+            model_dir = os.path.join(save_path, model)
+            try:
+                loader = SingleTaskExperimentLoader.from_path(model_dir)
 
-            # Load metrics
-            metric_dict = loader.load_metrics()
+                # Load  test metrics
+                metrics[save_path][model] = loader.load_metrics()
 
-            for k in metrics:
-                metrics[k].setdefault(save_path, {})[model] = metric_dict.get(k)
+                # Load train metrics
+                metrics_train[save_path][model] = loader.load_metrics(type='train')
 
-            # Load loss curve
-            loss_dict = loader.load_loss_curve()
-            for k in losses:
-                losses[k].setdefault(save_path, {})[model] = loss_dict.get(k)
+                # Load validation metrics
+                metrics_val[save_path][model] = loader.load_metrics(type='val')
 
-            # Load summary
-            summary_dict = loader.load_summary()
-            for k in summary:
-                summary[k].setdefault(save_path, {})[model] = summary_dict.get(k)
+                # Load loss curve
+                losses[save_path][model] = loader.load_loss_curve()
 
-            # Store loader
-            loaders[save_path][model] = loader
+                # Load summary
+                summary[save_path][model] = loader.load_summary()
 
-        except FileNotFoundError:
-            print(f"Skipping missing results: {model_dir}")
-        except Exception as e:
-            print(f"Error loading {model_dir}: {e}")
-        finally:
-            print(f"Checked: {model_dir}")
+                # Store loader
+                loaders[save_path][model] = loader
 
-        # Load data/indices once per save_path (any model folder should have them)
-        try:
-            loader = loaders[save_path].get(model_types[0])
-            if loader:
-                data = loader.load_data()
-                x_train[save_path] = data["x_train"]
-                y_train[save_path] = data["y_train"]
-                x_test[save_path] = data["x_test"]
-                y_test[save_path] = data["y_test"]
+            except FileNotFoundError:
+                print(f"Skipping missing results: {model_dir}")
+            except Exception as e:
+                print(f"Error loading {model_dir}: {e}")
+            finally:
+                print(f"Checked: {model_dir}")
 
-                ind = loader.load_ind()
-                ind_train[save_path] = ind["ind_train"]
-                ind_test[save_path] = ind["ind_test"]
-                ind_interp[save_path] = ind["ind_interp"]
-                ind_extrap[save_path] = ind["ind_extrap"]
+            # Load data/indices once per save_path (any model folder should have them)
+            try:
+                loader = loaders[save_path].get(model)
+                if loader:
+                    data = loader.load_data()
+                    x_train[save_path] = data["x_train"]
+                    y_train[save_path] = data["y_train"]
+                    x_val[save_path] = data["x_val"]
+                    y_val[save_path] = data["y_val"]
+                    x_test[save_path] = data["x_test"]
+                    y_test[save_path] = data["y_test"]
 
-        except Exception as e:
-            print(f"Failed to load data for {save_path}: {e}")
+                    region[save_path] = data.get('region', None)
+                    region_interp[save_path] = data.get('region_interp', None)
 
-    print("Loaded runs:", run_list)
+                    # ind = loader.load_ind()
+                    # ind_train[save_path] = ind["ind_train"]
+                    # ind_test[save_path] = ind["ind_test"]
+                    # ind_interp[save_path] = ind["ind_interp"]
+                    # ind_extrap[save_path] = ind["ind_extrap"]
 
-    return (loaders, metrics, losses, summary,
-            x_train, y_train, x_test, y_test,
-            ind_train, ind_test, ind_interp, ind_extrap,
+            except Exception as e:
+                print(f"Failed to load data for {save_path}: {e}")
+
+        print("Loaded runs:", run_list)
+
+    return (loaders, metrics, metrics_train, metrics_val, losses, summary,
+            x_train, y_train, x_val, y_val, x_test, y_test, region, region_interp,
             run_list)
 
 

@@ -8,7 +8,7 @@ import numpy as np
 import random
 
 from utils.general import set_determinism, count_parameters
-from utils.metrics import per_x_nlpd_from_samples_kde, energy_score_from_samples
+from utils.metrics import per_x_nlpd_from_samples_kde, energy_score_from_samples, metrics
 # from utils.plots import plot_meta_task, plot_loss_curve
 # from utils.debug_tools import debug_requires_grad, get_param_and_grad_dict
 
@@ -51,7 +51,7 @@ class SingleTaskTrainer:
             return self.model(x), torch.tensor(0.0, device=x.device)
 
     def train(self, x_train, y_train, epochs=1000, beta_param_dict=None, val_data=None,
-            print_every=100, batch_size=10, grad_clip=True, MC=1):
+            print_every=100, batch_size=64, grad_clip=True, MC=1):
 
         # Check if validation data exist
         self.val_exist = True if  (val_data[0] is not None and val_data[1] is not None) else False
@@ -202,12 +202,22 @@ class SingleTaskTrainer:
         else:
             preds = self.evaluate(x_val, MC=MC_val).astype(np.float64) # shape: (num_samples, batch_size, output_dim)
 
+        metric_dict = metrics(preds, self.y_val)
+
         for metric in val_metrics_set:
-            metric == 'mse' and self.mse_val.append((((preds.squeeze().T - y_val.reshape(-1, 1))** 2).mean(1).reshape(-1, 1)).squeeze())
-            metric == 'bias_sq' and self.bias_sq_val.append(((preds.mean(0) - y_val.reshape(-1, 1))**2).squeeze())
-            metric == 'var' and self.var_val.append((preds.var(0)).squeeze())
-            metric == 'nlpd' and self.nlpd_val.append(per_x_nlpd_from_samples_kde(preds=preds, y_true=y_val).squeeze())
-            metric == 'crps' and self.crps_val.append(energy_score_from_samples(preds=preds, y_true=y_val).squeeze())
+            metric == 'mse' and self.mse_val.append(metric_dict['mse'])
+            metric == 'bias_sq' and self.bias_sq_val.append(metric_dict['bias']**2)
+            metric == 'var' and self.var_val.append(metric_dict['var'])
+            metric == 'nlpd' and self.nlpd_val.append(metric_dict['nlpd_kde'])
+            metric == 'crps' and self.crps_val.append(metric_dict['crps'])
+
+
+        # for metric in val_metrics_set:
+        #     metric == 'mse' and self.mse_val.append((((preds.squeeze().T - y_val.reshape(-1, 1))** 2).mean(1).reshape(-1, 1)).squeeze())
+        #     metric == 'bias_sq' and self.bias_sq_val.append((preds.var(0)).squeeze())
+        #     metric == 'var' and self.var_val.append((preds.var(0)).squeeze())
+        #     metric == 'nlpd' and self.nlpd_val.append(per_x_nlpd_from_samples_kde(preds=preds, y_true=y_val).squeeze())
+        #     metric == 'crps' and self.crps_val.append(energy_score_from_samples(preds=preds, y_true=y_val).squeeze())
 
     def _save_checkpoint(self, epoch):
         # where to write checkpoints
@@ -398,7 +408,7 @@ if __name__=='__main__':
     print_every = 20
     sample = True
     seed = 10
-    model_type = 'MLPDropoutNet'
+    model_type = 'LP_FDNet'
     MC_val = 100
 
     if seed:

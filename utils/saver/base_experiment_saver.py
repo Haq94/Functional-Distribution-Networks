@@ -6,13 +6,18 @@ from .general_saver import save_analysis_arrays
 
 def base_experiment_saver(model,
                           trainer,
-                          metric_outputs,
+                          metrics_test,
                           summary_dict,
                           x_train,
                           y_train,
                           x_test,
                           y_test,
-                          save_path):
+                          save_path,
+                          x_val=None,
+                          y_val=None,
+                          metrics_train=None,
+                          metrics_val=None,
+                          info=None):
     """
     Save all outputs of a base experiment to disk in a structured format.
 
@@ -43,14 +48,34 @@ def base_experiment_saver(model,
              betas=np.array(trainer.betas))
 
     # === Save training and test data ===
-    np.savez(os.path.join(save_path, "analysis", "data.npz"),
-             x_train=x_train.cpu().numpy(),
-             y_train=y_train.cpu().numpy(),
-             x_test=x_test.cpu().numpy(),
-             y_test=y_test.cpu().numpy())
+    region = np.array(info.get('region', None))
+    region_interp = np.array(info.get('region_interp', None))
 
+    if x_val != None and y_val != None:
+        np.savez(os.path.join(save_path, "analysis", "data.npz"),
+                x_train=x_train.cpu().numpy(),
+                y_train=y_train.cpu().numpy(),
+                x_val=x_val.cpu().numpy(),
+                y_val=y_val.cpu().numpy(),
+                x_test=x_test.cpu().numpy(),
+                y_test=y_test.cpu().numpy(),
+                region=region,
+                region_interp=region_interp)
+    else:
+        np.savez(os.path.join(save_path, "analysis", "data.npz"),
+                x_train=x_train.cpu().numpy(),
+                y_train=y_train.cpu().numpy(),
+                x_test=x_test.cpu().numpy(),
+                y_test=y_test.cpu().numpy(),
+                region=region,
+                region_interp=region_interp)
+        
     # === Save metrics ===
-    save_analysis_arrays(metric_outputs, os.path.join(save_path, "analysis"))
+    save_analysis_arrays(metrics_test, os.path.join(save_path, "analysis"))
+    if metrics_train != None:
+        save_analysis_arrays(metrics_train, os.path.join(save_path, "train_metrics"))
+    if metrics_val != None:
+        save_analysis_arrays(metrics_val, os.path.join(save_path, "val_metrics"))
     # with open(os.path.join(save_dir, "metrics.json"), "w") as f:
     #     json.dump(safe_metrics, f, indent=4)
 

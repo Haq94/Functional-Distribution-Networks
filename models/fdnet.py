@@ -21,7 +21,7 @@ class FDNLayer(nn.Module):
             nn.Linear(hyper_hidden_dim, total_output_dim)
         )
 
-    def forward(self, x, return_kl=False, sample=True, use_softplus=True):
+    def forward(self, x, return_kl=False, sample=True, use_softplus=True, sample_per_inst=False):
         """
         Args:
             x: Input tensor of shape [B, input_dim]
@@ -51,8 +51,19 @@ class FDNLayer(nn.Module):
                 w_sigma = torch.exp(w_rho)
                 b_sigma = torch.exp(b_rho)
 
-            W = w_mu + w_sigma * torch.randn_like(w_mu, device=w_mu.device)
-            b = b_mu + b_sigma * torch.randn_like(b_mu, device=b_mu.device)
+            if sample_per_inst:
+                # New noise draw per batch (B noise arrays) 
+                z_w = torch.randn_like(w_mu, device=w_mu.device, dtype=w_mu.dtype)
+                z_b = torch.randn_like(b_mu, device=b_mu.device, dtype=b_mu.dtype)
+            else:
+                # Shared-noise per batch (one draw, broadcast to all B)
+                z_w = torch.randn(1, self.weight_param_dim, device=w_mu.device, dtype=w_mu.dtype)
+                z_b = torch.randn(1, self.bias_param_dim,   device=b_mu.device, dtype=b_mu.dtype)
+                z_w = z_w.expand(B, -1)   # now shape matches w_mu: [B, P_w]
+                z_b = z_b.expand(B, -1)   # matches b_mu: [B, P_b]
+
+            W = w_mu + w_sigma * z_w
+            b = b_mu + b_sigma * z_b
         else:
             w_mu, _, b_mu, _ = torch.split(h, split_sizes, dim=-1)
 

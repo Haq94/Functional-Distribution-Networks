@@ -35,8 +35,8 @@ class BayesLayer(nn.Module):
             weight_sigma = torch.exp(self.weight_log_sigma)
             bias_sigma = torch.exp(self.bias_log_sigma)
 
-            eps_w = torch.randn_like(weight_sigma)
-            eps_b = torch.randn_like(bias_sigma)
+            eps_w = torch.randn_like(weight_sigma, dtype=weight_sigma.dtype)
+            eps_b = torch.randn_like(bias_sigma, dtype=bias_sigma.dtype)
 
             weight = self.weight_mu + eps_w * weight_sigma
             bias = self.bias_mu + eps_b * bias_sigma
