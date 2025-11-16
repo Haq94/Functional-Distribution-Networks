@@ -184,6 +184,13 @@ class BaseExperiment:
     def choose_best_model(self, trainer, x_val, checkpoint_dict):
         if len(checkpoint_dict) == 0:
             return 
+        
+        # --- Make sure x_val is a NumPy array on CPU ---
+        if isinstance(x_val, torch.Tensor):
+            x_val_np = x_val.detach().cpu().numpy().squeeze()
+        else:
+            x_val_np = np.asarray(x_val).squeeze()
+
         # Checkpoint parameters
         metric_str = checkpoint_dict['metric_str']
         region_interp = checkpoint_dict['region_interp']
@@ -191,8 +198,8 @@ class BaseExperiment:
         interp_or_extrap = checkpoint_dict['interp_or_extrap']
 
         # Interp and extrap indices
-        ind_interp = np.where((x_val >= region_interp[0]) & (x_val <= region_interp[1]))[0]
-        ind_extrap = np.where((x_val < region_interp[0]) | (x_val > region_interp[1]))[0]
+        ind_interp = np.where((x_val_np >= region_interp[0]) & (x_val_np <= region_interp[1]))[0]
+        ind_extrap = np.where((x_val_np < region_interp[0]) | (x_val_np > region_interp[1]))[0]
 
         if interp_or_extrap == 'interp' and ind_interp.shape[0] == 0:
             print('No interpolation points in validation data set')

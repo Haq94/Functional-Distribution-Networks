@@ -3,16 +3,17 @@ import argparse
 import os
 from pathlib import Path
 from datetime import datetime
+import re
 
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import spearmanr, kendalltau, pearsonr
 
-from configs import baseline_params
+from utils.configs import baseline_params
 from experiments.single_task_experiment import SingleTaskExperiment
 from data.toy_functions import generate_splits
 from utils.loader.single_task_loader import single_task_overlay_loader
-from utils.plots.plot_helpers import iclr_figsize
+from utils.plots.plot_helpers import iclr_figsize, label_subplots
 from utils.saver.general_saver import save_plot
 
 
@@ -62,19 +63,26 @@ def parse_args() -> argparse.Namespace:
         help="Seed for toy data split.",
     )
 
-    # ---- experiment / training options ----
-    parser.add_argument(
-        "--exp-name",
-        type=str,
-        default="paper_repro",
-        help="Name of this experiment (subfolder under results/single_task_experiment).",
-    )
+    # ---- experiment naming / saving ----
     parser.add_argument(
         "--results-root",
         type=str,
         default="results",
-        help="Root folder for saving results.",
+        help="Root directory to save experiments under.",
     )
+    parser.add_argument(
+        "--exp-name",
+        type=str,
+        default="paper_repro",
+        help="Name of this experiment (subfolder under results_root/single_task_experiment).",
+    )
+    parser.add_argument(
+        "--timestamp",
+        action="store_true",
+        help="Append timestamp to experiment directory to avoid overwrites.",
+    )
+
+    # ---- models / seeds ----
     parser.add_argument(
         "--models",
         type=str,
@@ -91,28 +99,6 @@ def parse_args() -> argparse.Namespace:
         help="Training seeds (and default seeds to analyze if mode=train_and_analyze).",
     )
 
-    parser.add_argument(
-        "--beta-scheduler",
-        choices=["linear", "cosine", "sigmoid", "unity", "zero"],
-        default="cosine",
-        help="KL beta schedule key (mapped into baseline_params).",
-    )
-    parser.add_argument(
-        "--no-analysis",
-        action="store_true",
-        help="Disable per-run plotting inside SingleTaskExperiment.",
-    )
-    parser.add_argument(
-        "--no-save",
-        action="store_true",
-        help="Disable saving during training (debug only).",
-    )
-    parser.add_argument(
-        "--timestamp",
-        action="store_true",
-        help="Append timestamp to experiment directory to avoid overwrites.",
-    )
-
     # ---- overlay-analysis options (for mode=analyze / train_and_analyze) ----
     parser.add_argument(
         "--overlay-runs",
@@ -127,7 +113,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--overlay-name",
         type=str,
-        default="quad",
+        default=None,
         help="Short name for this overlay analysis (used as subfolder name for figs/tables).",
     )
 
@@ -139,7 +125,9 @@ def parse_args() -> argparse.Namespace:
 # -----------------------------------------------------------------------------------
 
 def build_input_data_dict_from_toy(cfg: dict, data_seed: int) -> dict:
-    """Generate toy data using paper specs from baseline_params."""
+    """
+    Generate toy *inputs* only. SingleTaskExperiment will generate y via sample_function.
+    """
     region = cfg["region"]
     region_interp = cfg["region_interp"]
     n_train = cfg["n_train"]
@@ -158,21 +146,41 @@ def build_input_data_dict_from_toy(cfg: dict, data_seed: int) -> dict:
         n_val_extrap=n_val_extrap,
         seed=data_seed,
     )
-    return input_data_dict
+
+    # generate_splits should give us x’s (and usually region info). We do NOT
+    # expect any y’s here – SingleTaskExperiment creates them.
+    required = ["x_train", "x_val", "x_test"]
+    for k in required:
+        if k not in input_data_dict:
+            raise KeyError(f"generate_splits missing key: {k}")
+
+    return {
+        "x_train": input_data_dict["x_train"],
+        "x_val": input_data_dict["x_val"],
+        "x_test": input_data_dict["x_test"],
+        # These may already be in input_data_dict; we override with cfg for safety.
+        "region": tuple(region),
+        "region_interp": tuple(region_interp),
+    }
+
 
 
 def build_input_data_dict_from_npz(path: str) -> dict:
-    if not os.path.isfile(path):
-        raise FileNotFoundError(f"npz file not found: {path}")
-
+    """Load pre-split data from .npz with keys matching the toy dict structure."""
     data = np.load(path)
     required = [
-        "x_train", "y_train", "x_val", "y_val",
-        "x_test", "y_test", "region", "region_interp",
+        "x_train",
+        "y_train",
+        "x_val",
+        "y_val",
+        "x_test",
+        "y_test",
+        "region",
+        "region_interp",
     ]
     missing = [k for k in required if k not in data]
     if missing:
-        raise KeyError(f"npz missing required keys: {missing}")
+        raise KeyError(f"npz at {path} missing required keys: {missing}")
 
     return {
         "x_train": data["x_train"],
@@ -189,31 +197,11 @@ def build_input_data_dict_from_npz(path: str) -> dict:
 def make_save_path(results_root: str, exp_name: str, timestamp: bool) -> str:
     base_dir = Path(results_root) / "single_task_experiment"
     if timestamp:
-        t_str = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-        exp_dir = base_dir / f"{exp_name}_{t_str}"
-    else:
-        exp_dir = base_dir / exp_name
-        if exp_dir.exists():
-            t_str = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-            print(f"[main] WARNING: {exp_dir} exists, appending timestamp.")
-            exp_dir = base_dir / f"{exp_name}_{t_str}"
-
-    exp_dir.mkdir(parents=True, exist_ok=True)
-    return str(exp_dir)
-
-
-def get_beta_param_dict(cfg: dict, name: str) -> dict:
-    key_map = {
-        "linear": "linear_beta_scheduler",
-        "cosine": "cosine_beta_scheduler",
-        "sigmoid": "signmoid_beta_scheduler",  # yes, spelled that way in configs
-        "unity": "unity_beta_scheduler",
-        "zero": "zero_beta_scheduler",
-    }
-    full_key = key_map[name]
-    if full_key not in cfg:
-        raise KeyError(f"{full_key} not found in baseline_params.")
-    return cfg[full_key]
+        now = datetime.now().strftime("%Y%m%d_%H%M%S")
+        exp_name = f"{exp_name}_{now}"
+    save_path = base_dir / exp_name
+    save_path.mkdir(parents=True, exist_ok=True)
+    return str(save_path)
 
 
 # -----------------------------------------------------------------------------------
@@ -249,8 +237,8 @@ def aurc(var, loss):
     order = np.argsort(var)  # lower var = higher confidence
     cum_mean = np.cumsum(loss[order]) / np.arange(1, len(loss) + 1)
     coverage = np.arange(1, len(loss) + 1) / len(loss)
-    area = float(np.trapz(cum_mean, coverage))
-    return area, coverage, cum_mean
+    auc = float(np.trapz(cum_mean, coverage))
+    return auc, coverage, cum_mean
 
 
 def safe_mean(x):
@@ -268,20 +256,68 @@ def safe_spearman(x, y):
     return spearmanr(x[mask], y[mask])[0]
 
 
+def safe_kendall(x, y):
+    x = np.asarray(x)
+    y = np.asarray(y)
+    mask = np.isfinite(x) & np.isfinite(y)
+    if not mask.any():
+        return np.nan
+    return kendalltau(x[mask], y[mask])[0]
+
+def infer_run_name_from_summary(run_summary: dict) -> str | None:
+    """
+    Infer a short task name (e.g. 'step', 'sine', 'quad') from the summary dict
+    for a single run.
+
+    run_summary is summary[run_key]: a dict mapping model_name -> summary_info.
+    We assume the function description is stored as summary_info['desc'].
+    """
+    if not isinstance(run_summary, dict) or not run_summary:
+        return None
+
+    # Take the first model's summary (all models share the same underlying function)
+    first_summary = next(iter(run_summary.values()))
+    if not isinstance(first_summary, dict):
+        return None
+
+    desc = first_summary.get("desc", "")
+    if not isinstance(desc, str):
+        desc = str(desc)
+    dl = desc.lower()
+
+    # Try to map to the canonical toy names
+    if "step" in dl:
+        return "step"
+    if "sine" in dl or "sin" in dl:
+        return "sine"
+    if "quad" in dl or "quadratic" in dl:
+        return "quad"
+
+    # Fallback: short slug from the description
+    slug = re.sub(r"[^a-z0-9]+", "-", dl).strip("-")
+    return slug[:30] or None
+
+
+
 def run_overlay_analysis(
     seed_dirs,
     out_root,
-    overlay_name="quad",
+    overlay_name=None,
     run_models=None,
     save_tables=True,
     save_plots=True,
 ):
     """
-    Reproduce delete.py-style overlay analysis across a list of seed dirs.
+    Paper-style overlay analysis: **one task / run at a time**.
 
     Each element of seed_dirs should look like:
       results/single_task_experiment/<exp_name>/seed_<seed>
     and must contain subfolders named by model type (IC_FDNet, ...).
+
+    For the main paper figs, call this separately for each task/seed:
+      - step
+      - sine
+      - quad
     """
     if run_models is None:
         run_models = [
@@ -297,11 +333,11 @@ def run_overlay_analysis(
         "IC_FDNet": "#1f77b4",
         "LP_FDNet": "#ff7f0e",
         "BayesNet": "#2ca02c",
-        "GaussHyperNet": "#ff0000",
-        "DeepEnsembleNet": "#653593",
-        "HyperNet": "#8c564b",
-        "MLPNet": "#e377c2",
-        "MLPDropoutNet": "#e2fb55",
+        "GaussHyperNet": "#d62728",
+        "MLPDropoutNet": "#9467bd",
+        "DeepEnsembleNet": "#8c564b",
+        "MLPNet": "#17becf",
+        "HyperNet": "#e377c2",
     }
 
     def display_name(name: str) -> str:
@@ -311,7 +347,7 @@ def run_overlay_analysis(
             return "LP-FDNet"
         return name
 
-    out_dir = os.path.join(out_root, overlay_name)
+    out_dir = os.path.join(out_root, "paper_figs")
     os.makedirs(out_dir, exist_ok=True)
 
     print(f"[overlay] analyzing seeds: {seed_dirs}")
@@ -333,57 +369,61 @@ def run_overlay_analysis(
         run_list,
     ) = single_task_overlay_loader(seed_dirs)
 
-    # We'll aggregate over all provided seeds/runs
-    # (delete.py used run index 0/1/2; here you just choose the seed_dirs explicitly)
-    assert len(run_list) == len(seed_dirs)
+    # ---- Select single run (paper-style overlay, one task at a time) ----
+    if len(run_list) != 1:
+        raise ValueError(
+            f"run_overlay_analysis (paper mode) expects exactly one run/seed dir, "
+            f"got {len(run_list)}. Call it separately per task."
+        )
+    run_key = run_list[0]
 
-    # Use first run's region info
-    first_run = run_list[0]
-    region = region_all[first_run]
-    region_interp = region_interp_all[first_run]
+   # Infer overlay_name from summary.json if not provided
+    if overlay_name is None:
+        run_summary = summary.get(run_key, {})
+        inferred = infer_run_name_from_summary(run_summary)
+        overlay_name = inferred or "overlay"
+
+    # Region info for this task
+    region = region_all[run_key]
+    region_interp = region_interp_all[run_key]
     x_min, x_max = region_interp
 
-    # build combined store per model
+    # build per-model store for this single run
     store = {}
     models_present = []
 
     for model in run_models:
-        xs = []
-        mses = []
-        vars_ = []
-        nlpds = []
-        crpss = []
-
-        for run_path in run_list:
-            mtest = metrics_test[run_path].get(model)
-            if mtest is None:
-                continue
-            x_test = x_test_all[run_path]
-            y_test = y_test_all[run_path]
-            y_hat_mean = mtest["mean"]
-            y_hat_var = mtest["var"]
-            mse = (y_hat_mean - y_test.squeeze()) ** 2
-
-            xs.append(x_test.squeeze())
-            mses.append(mse)
-            vars_.append(y_hat_var)
-
-            if "nlpd_kde" in mtest:
-                nlpds.append(mtest["nlpd_kde"])
-            if "crps" in mtest:
-                crpss.append(mtest["crps"])
-
-        if not xs:
+        mtest = metrics_test[run_key].get(model)
+        if mtest is None:
             continue
 
-        x = np.concatenate(xs)
-        mse = np.concatenate(mses)
-        var = np.concatenate(vars_)
-        nlpd = np.concatenate(nlpds) if nlpds else np.full_like(mse, np.nan)
-        crps = np.concatenate(crpss) if crpss else np.full_like(mse, np.nan)
+        x_test = x_test_all[run_key]
+        y_test = y_test_all[run_key]
+
+        y_hat_mean = mtest["mean"]
+        y_hat_var = mtest["var"]
+
+        y_true = y_test.squeeze()
+        mean_pred = y_hat_mean.squeeze()
+
+        mse = (mean_pred - y_true) ** 2
+        var = y_hat_var.squeeze()
+
+        # Optional metrics
+        if "nlpd_kde" in mtest:
+            nlpd = mtest["nlpd_kde"]
+        else:
+            nlpd = np.full_like(var, np.nan, dtype=float)
+
+        if "crps" in mtest:
+            crps = mtest["crps"]
+        else:
+            crps = np.full_like(var, np.nan, dtype=float)
 
         store[model] = dict(
-            x=x,
+            x=x_test.squeeze(),
+            y_true=y_true,
+            mean=mean_pred,
             mse=mse,
             var=var,
             nlpd=nlpd,
@@ -391,6 +431,7 @@ def run_overlay_analysis(
             label=display_name(model),
             color=model_colors.get(model, "#777777"),
         )
+
         models_present.append(model)
 
     if not models_present:
@@ -415,7 +456,7 @@ def run_overlay_analysis(
         mse = arr["mse"]
 
         rho = safe_spearman(var, mse)
-        tau = safe_spearman(var, mse)  # close enough; delete.py used kendalltau separately
+        tau = safe_kendall(var, mse)
         pr = pearsonr(var, mse)[0]
 
         a, b, rce = lin_fit_mse_on_var(var, mse)
@@ -426,37 +467,48 @@ def run_overlay_analysis(
 
         results.append([
             display_name(name),
-            float(np.mean(mse)),
-            float(np.median(mse)),
-            float(np.mean(var)),
-            rho, tau, pr, a, b, rce, auc,
+            safe_mean(mse),
+            np.median(mse),
+            safe_mean(var),
+            rho,
+            tau,
+            pr,
+            a,
+            b,
+            rce,
+            auc,
         ])
 
-    df_summary = None
-    try:
-        import pandas as pd
+    import pandas as pd
 
-        cols = [
-            "Model",
-            "Mean MSE", "Median MSE", "Mean Var",
-            "Spearman ρ", "Kendall τ", "Pearson r",
-            "Intercept a", "Slope b", "RCE", "AURC",
-        ]
-        df_summary = pd.DataFrame(results, columns=cols).sort_values("AURC").reset_index(drop=True)
-        print("\n=== Summary (lower AURC/RCE better; ideal slope≈1, intercept≈0) ===")
+    cols = [
+        "Model",
+        "MSE(mean)",
+        "MSE(median)",
+        "Var(mean)",
+        "Spearman ρ",
+        "Kendall τ",
+        "Pearson r",
+        "a (intercept)",
+        "b (slope)",
+        "RCE",
+        "AURC",
+    ]
+    df_summary = pd.DataFrame(results, columns=cols)
+    print("\n=== Global summary (all points) ===")
+    with pd.option_context("display.max_rows", None, "display.max_columns", None):
         print(df_summary.to_string(index=False, float_format=lambda x: f"{x:.3g}"))
 
-        if save_tables:
-            df_summary.to_csv(os.path.join(out_dir, "summary_main.csv"), index=False)
-            with open(os.path.join(out_dir, "summary_main.tex"), "w", encoding="utf-8") as f:
-                f.write(df_summary.to_latex(index=False, escape=True))
-    except Exception as e:
-        print(f"[overlay] pandas summary failed ({e}); printing fallback.")
-        for row in sorted(results, key=lambda r: r[-1]):
-            print(row)
+    if save_tables:
+        df_summary.to_csv(os.path.join(out_dir, "summary_main.csv"), index=False)
+        try:
+            with open(os.path.join(out_dir, "summary_main.tex"), "w") as f_tex:
+                f_tex.write(df_summary.to_latex(index=False, float_format=lambda x: f"{x:.3g}"))
+        except Exception as e:
+            print(f"[overlay] LaTeX summary export failed ({e})")
 
     # --------------------------------------------------------------------------------
-    # ID vs OOD delta table (ΔMSE, ΔVar, ΔNLPD, ΔCRPS)
+    # ID vs OOD per-model metrics + deltas
     # --------------------------------------------------------------------------------
     df_delta = None
     df_region = None
@@ -468,37 +520,26 @@ def run_overlay_analysis(
             x = arr["x"]
             var = arr["var"]
             mse = arr["mse"]
-            nlpd = arr["nlpd"]
             crps = arr["crps"]
             interp_mask = arr["interp_mask"]
             extrap_mask = arr["extrap_mask"]
 
-            # sort by x just to be consistent
-            order = np.argsort(x)
-            interp_mask_sorted = interp_mask[order]
-            extrap_mask_sorted = extrap_mask[order]
-            mse_sorted = mse[order]
-            var_sorted = var[order]
-            nlpd_sorted = nlpd[order]
-            crps_sorted = crps[order]
+            def region_stats(mask, v, m, c):
+                if not np.any(mask):
+                    return np.nan, np.nan, np.nan
+                return (
+                    float(np.mean(m[mask])),
+                    float(np.mean(v[mask])),
+                    float(np.mean(c[mask])) if np.isfinite(c).any() else np.nan,
+                )
 
-            has_nlpd = np.isfinite(nlpd_sorted).any()
-            has_crps = np.isfinite(crps_sorted).any()
-
-            mse_id = safe_mean(mse_sorted[interp_mask_sorted])
-            mse_ood = safe_mean(mse_sorted[extrap_mask_sorted])
-            var_id = safe_mean(var_sorted[interp_mask_sorted])
-            var_ood = safe_mean(var_sorted[extrap_mask_sorted])
-            nlpd_id = safe_mean(nlpd_sorted[interp_mask_sorted]) if has_nlpd else np.nan
-            nlpd_ood = safe_mean(nlpd_sorted[extrap_mask_sorted]) if has_nlpd else np.nan
-            crps_id = safe_mean(crps_sorted[interp_mask_sorted]) if has_crps else np.nan
-            crps_ood = safe_mean(crps_sorted[extrap_mask_sorted]) if has_crps else np.nan
+            mse_id, var_id, crps_id = region_stats(interp_mask, var, mse, crps)
+            mse_ood, var_ood, crps_ood = region_stats(extrap_mask, var, mse, crps)
 
             rows.append([
                 display_name(name),
                 mse_id, mse_ood, mse_ood - mse_id,
                 var_id, var_ood, var_ood - var_id,
-                nlpd_id, nlpd_ood, nlpd_ood - nlpd_id,
                 crps_id, crps_ood, crps_ood - crps_id,
             ])
 
@@ -506,18 +547,16 @@ def run_overlay_analysis(
             "Model",
             "MSE(ID)", "MSE(OOD)", "ΔMSE",
             "Var(ID)", "Var(OOD)", "ΔVar",
-            "NLPD(ID)", "NLPD(OOD)", "ΔNLPD",
             "CRPS(ID)", "CRPS(OOD)", "ΔCRPS",
         ]
         df_delta = pd.DataFrame(rows, columns=cols)
         df_region = df_delta[
-            ["Model", "MSE(ID)", "MSE(OOD)", "Var(ID)", "Var(OOD)",
-             "NLPD(ID)", "NLPD(OOD)", "CRPS(ID)", "CRPS(OOD)"]
+            ["Model", "MSE(ID)", "MSE(OOD)",
+             "Var(ID)", "Var(OOD)",
+             "CRPS(ID)", "CRPS(OOD)"]
         ].copy()
 
         sort_keys = []
-        if np.isfinite(df_delta["ΔNLPD"]).any():
-            sort_keys.append("ΔNLPD")
         if np.isfinite(df_delta["ΔCRPS"]).any():
             sort_keys.append("ΔCRPS")
         sort_keys.append("ΔMSE")
@@ -539,20 +578,7 @@ def run_overlay_analysis(
     if not save_plots:
         return
 
-    # (1) Variance vs x
-    fig, ax = plt.subplots(1, 1, figsize=iclr_figsize(layout="single"), dpi=DPI)
-    for name in models_present:
-        ax.plot(store[name]["x"], store[name]["var"],
-                lw=1.6, label=store[name]["label"],
-                color=store[name]["color"])
-    ax.set_ylabel("Variance")
-    ax.set_xlabel("x")
-    ax.grid(alpha=0.3)
-    ax.legend(frameon=False, ncol=3, fontsize=9)
-    fig.tight_layout()
-    save_plot(fig, os.path.join(out_dir, "var_vs_x"))
-
-    # (2) MSE vs Var scatter + linear fits
+    # (1) MSE vs Var scatter + linear fits
     fig, ax = plt.subplots(1, 1, figsize=iclr_figsize(layout="single"), dpi=DPI)
     vmin = min(store[n]["var"].min() for n in models_present)
     vmax = max(store[n]["var"].max() for n in models_present)
@@ -568,9 +594,9 @@ def run_overlay_analysis(
     ax.grid(alpha=0.3)
     ax.legend(frameon=False, ncol=2, fontsize=9)
     fig.tight_layout()
-    save_plot(fig, os.path.join(out_dir, "mse_vs_var_scatter"))
+    save_plot(out_dir, "mse_vs_var_scatter", dpi=DPI, fig=fig)
 
-    # (3) Calibration curve: binned MSE vs var
+    # (2) Calibration curve: binned MSE vs var
     fig, ax = plt.subplots(1, 1, figsize=iclr_figsize(layout="single"), dpi=DPI)
     ylim = max(store[n]["var"].max() for n in models_present)
     ax.plot([0, ylim], [0, ylim], "k--", lw=1, label="Ideal: y=x")
@@ -583,9 +609,9 @@ def run_overlay_analysis(
     ax.grid(alpha=0.3)
     ax.legend(frameon=False, ncol=3, fontsize=9)
     fig.tight_layout()
-    save_plot(fig, os.path.join(out_dir, "calibration_curve"))
+    save_plot(out_dir, "calibration_curve", dpi=DPI, fig=fig)
 
-    # (4) Risk–Coverage
+    # (3) Risk–Coverage
     fig, ax = plt.subplots(1, 1, figsize=iclr_figsize(layout="single"), dpi=DPI)
     for name in models_present:
         arr = store[name]
@@ -596,47 +622,232 @@ def run_overlay_analysis(
     ax.grid(alpha=0.3)
     ax.legend(frameon=False, ncol=2, fontsize=9)
     fig.tight_layout()
-    save_plot(fig, os.path.join(out_dir, "risk_coverage"))
+    save_plot(out_dir, "risk_coverage", dpi=DPI, fig=fig)
 
-    # (5) NLPD vs x (if available)
-    have_nlpd = [n for n in models_present if np.isfinite(store[n]["nlpd"]).any()]
-    if have_nlpd:
-        fig, ax = plt.subplots(1, 1, figsize=iclr_figsize(layout="single"), dpi=DPI)
-        for name in have_nlpd:
+    # (4) Predictive mean vs x (with ground truth and ID region shaded)
+    # -----------------------------------------------------------------
+    fig_mean, ax_mean = plt.subplots(
+        1, 1,
+        figsize=iclr_figsize(layout="single"),
+        dpi=DPI,
+    )
+
+    # Use any one model just to get the x-grid and y_true
+    first_model = models_present[0]
+    x_plot = store[first_model]["x"]
+    y_true_plot = store[first_model]["y_true"]
+
+    # Shade interpolation (ID) region
+    ax_mean.axvspan(x_min, x_max, color="0.9", alpha=0.4, zorder=0)
+
+    # Ground truth curve
+    order = np.argsort(x_plot)
+    ax_mean.plot(
+        x_plot[order],
+        y_true_plot[order],
+        "k--",
+        lw=1.3,
+        label="Ground truth",
+    )
+
+    # Model means
+    for name in models_present:
+        arr = store[name]
+        x = arr["x"]
+        mean_pred = arr["mean"]
+        order = np.argsort(x)
+        ax_mean.plot(
+            x[order],
+            mean_pred[order],
+            lw=1.3,
+            color=arr["color"],
+            label=arr["label"],
+        )
+
+    ax_mean.set_ylabel("Mean")
+    ax_mean.set_xlabel("x")
+    ax_mean.grid(alpha=0.3)
+    ax_mean.legend(frameon=False, ncol=2, fontsize=8)
+
+    fig_mean.tight_layout()
+    save_plot(out_dir, "mean_vs_x_with_truth", dpi=DPI, fig=fig_mean)
+
+    # (5) MSE, variance, and CRPS vs x (1×3 row, ID region shaded)
+    # -------------------------------------------------------------
+    # Check whether we have any non-NaN CRPS at all
+    have_crps = any(np.isfinite(store[n]["crps"]).any() for n in models_present)
+
+    n_cols = 3 if have_crps else 2
+    fig, axes = plt.subplots(
+        1, n_cols,
+        figsize=(9.0, 3.0),  # tweak if you want wider/narrower
+        dpi=DPI,
+        sharex=True,
+    )
+    if n_cols == 1:
+        axes = [axes]
+
+    # Shade interpolation (ID) region in all subplots
+    for ax in axes:
+        ax.axvspan(x_min, x_max, color="0.9", alpha=0.4, zorder=0)
+
+    # Col 1: MSE vs x
+    ax_mse = axes[0]
+    for name in models_present:
+        arr = store[name]
+        x = arr["x"]
+        mse = arr["mse"]
+        order = np.argsort(x)
+        ax_mse.plot(
+            x[order],
+            mse[order],
+            lw=1.3,
+            color=arr["color"],
+            label=arr["label"],
+        )
+    ax_mse.set_ylabel("MSE")
+    ax_mse.grid(alpha=0.3)
+
+    # Col 2: variance vs x
+    ax_var = axes[1]
+    for name in models_present:
+        arr = store[name]
+        x = arr["x"]
+        v = arr["var"]
+        order = np.argsort(x)
+        ax_var.plot(
+            x[order],
+            v[order],
+            lw=1.3,
+            color=arr["color"],
+            label=arr["label"],
+        )
+    ax_var.set_ylabel("Variance")
+    ax_var.grid(alpha=0.3)
+
+    # Col 3 (optional): CRPS vs x
+    if have_crps:
+        ax_crps = axes[2]
+        for name in models_present:
             arr = store[name]
-            ax.plot(arr["x"], arr["nlpd"], lw=1.6,
-                    label=arr["label"], color=arr["color"])
-        ax.set_xlabel("x")
-        ax.set_ylabel("NLPD (KDE)")
-        ax.grid(alpha=0.3)
-        ax.legend(frameon=False, ncol=3, fontsize=9)
-        fig.tight_layout()
-        save_plot(fig, os.path.join(out_dir, "nlpd_vs_x"))
+            x = arr["x"]
+            c = arr["crps"]
+            if not np.isfinite(c).any():
+                continue
+            order = np.argsort(x)
+            ax_crps.plot(
+                x[order],
+                c[order],
+                lw=1.3,
+                color=arr["color"],
+                label=arr["label"],
+            )
+        ax_crps.set_ylabel("CRPS")
+        ax_crps.grid(alpha=0.3)
 
-    # (6) Delta bar charts if we have df_delta
+    # Common x-label
+    axes[-1].set_xlabel("x")
+
+    # No (a),(b),(c) labels here
+    fig.tight_layout()
+    save_plot(out_dir, "mse_var_crps_vs_x", dpi=DPI, fig=fig)
+
+
+    # (6) Delta bar charts: ΔMSE / ΔVar / ΔCRPS as 1×3 row (left-to-right)
     if df_delta is not None:
-        import pandas as pd
         labels = df_delta["Model"].values
         idx = np.arange(len(labels))
         colors = [model_colors.get(m.replace("-", "_"), "#777") for m in labels]
 
-        metrics = [("ΔMSE", "delta_bars_MSE"),
-                   ("ΔVar", "delta_bars_Var"),
-                   ("ΔNLPD", "delta_bars_NLPD"),
-                   ("ΔCRPS", "delta_bars_CRPS")]
+        metric_specs = [
+            ("ΔMSE",  "ΔMSE (OOD − ID)"),
+            ("ΔVar",  "ΔVar (OOD − ID)"),
+            ("ΔCRPS", "ΔCRPS (OOD − ID)"),
+        ]
 
-        for col, fname in metrics:
+        # 1 row, multiple columns (left-to-right)
+        n_cols = len(metric_specs)
+        fig, axes = plt.subplots(
+            1, n_cols,
+            figsize=(9.0, 3.0),  # tweak width/height as needed
+            dpi=DPI,
+            sharey=False,
+        )
+        if n_cols == 1:
+            axes = [axes]
+
+        for ax, (col, ylabel) in zip(axes, metric_specs):
             if col not in df_delta.columns:
+                ax.set_visible(False)
                 continue
-            fig, ax = plt.subplots(1, 1, figsize=iclr_figsize(layout="single"), dpi=DPI)
             vals = df_delta[col].values
             ax.bar(idx, vals, color=colors)
+            ax.set_ylabel(ylabel)
+            ax.axhline(0.0, color="k", linewidth=0.8, linestyle="--", alpha=0.7)
+            ax.grid(axis="y", alpha=0.3)
             ax.set_xticks(idx)
             ax.set_xticklabels(labels, rotation=30, ha="right")
-            ax.set_ylabel(col)
-            ax.grid(axis="y", alpha=0.3)
-            fig.tight_layout()
-            save_plot(fig, os.path.join(out_dir, fname))
+
+        # No (a), (b), (c) labels here
+        fig.tight_layout()
+        save_plot(out_dir, "delta_bars_MSE_Var_CRPS", dpi=DPI, fig=fig)
+
+
+    # (7) Scatter: MSE vs Var in Interp vs Extrap regions
+    def _add_ref_line(ax, all_vars):
+        cats = [a for a in all_vars if a.size > 0 and np.isfinite(a).any()]
+        if not cats:
+            return
+        vmin = min(a.min() for a in cats)
+        vmax = max(a.max() for a in cats)
+        if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
+            return
+        xline = np.linspace(vmin, vmax, 200)
+        ax.plot(xline, xline, "k--", lw=1, label="Ideal: MSE=Var")
+
+    fig, axes = plt.subplots(1, 2, figsize=iclr_figsize(layout="double"), dpi=DPI, sharey=True)
+    all_vars_i, all_vars_o = [], []
+
+    for name in models_present:
+        arr = store[name]
+        c = arr["color"]
+        lab = arr["label"]
+        x = arr["x"]
+        v = arr["var"]
+        m = arr["mse"]
+        interp_mask = arr["interp_mask"]
+        extrap_mask = arr["extrap_mask"]
+
+        order = np.argsort(x)
+        vi = v[order][interp_mask[order]]
+        mi = m[order][interp_mask[order]]
+        vo = v[order][extrap_mask[order]]
+        mo = m[order][extrap_mask[order]]
+
+        rho_i = safe_spearman(vi, mi)
+        rho_o = safe_spearman(vo, mo)
+
+        axes[0].scatter(vi, mi, s=10, alpha=0.35, color=c,
+                        label=f"{lab} (ρ={np.nan if np.isnan(rho_i) else rho_i:.2f})")
+        axes[1].scatter(vo, mo, s=10, alpha=0.35, color=c,
+                        label=f"{lab} (ρ={np.nan if np.isnan(rho_o) else rho_o:.2f})")
+
+        all_vars_i.append(vi)
+        all_vars_o.append(vo)
+
+    _add_ref_line(axes[0], all_vars_i)
+    _add_ref_line(axes[1], all_vars_o)
+
+    for ax in axes:
+        ax.set_xlabel("Variance")
+        ax.grid(alpha=0.3)
+        ax.legend(frameon=False, ncol=2, fontsize=8)
+    axes[0].set_ylabel("MSE")
+    axes[0].set_title("Interp (ID)")
+    axes[1].set_title("Extrap (OOD)")
+    # label_subplots(axes)
+    fig.tight_layout()
+    save_plot(out_dir, "scatter_interp_extrap", dpi=DPI, fig=fig)
 
 
 # -----------------------------------------------------------------------------------
@@ -647,7 +858,7 @@ def run_training_and_get_seed_dirs(args: argparse.Namespace) -> (str, list):
     cfg = baseline_params
 
     # data
-    if args.dataset-mode == "toy":
+    if args.dataset_mode == "toy":
         print("[main] Using toy dataset (paper specs).")
         input_data_dict = build_input_data_dict_from_toy(cfg, args.data_seed)
     else:
@@ -657,70 +868,35 @@ def run_training_and_get_seed_dirs(args: argparse.Namespace) -> (str, list):
         input_data_dict = build_input_data_dict_from_npz(args.data_path)
 
     # model list & seeds
-    model_types = [m.strip() for m in args.models.split(",") if m.strip()]
+    model_type = [m.strip() for m in args.models.split(",") if m.strip()]
     seeds = args.seeds
 
-    print(f"[main] Training models: {model_types}")
-    print(f"[main] Seeds: {seeds}")
-
-    # model hyperparams ~1k params from baseline_params
-    full_model_dict = cfg["model_dict"]
-    model_dict = {m: full_model_dict[m] for m in model_types}
-
-    epochs = cfg["epochs"]
-    ensemble_epochs = cfg["ensemble_epochs"]
-    MC_train = cfg["MC_train"]
-    MC_val = cfg["MC_val"]
-    MC_test = cfg["MC_test"]
-    checkpoint_dicts = cfg["checkpoint_dict"]
-    beta_param_dict = get_beta_param_dict(cfg, args.beta_scheduler)
-
-    plot_dict = {
-        "Single": [
-            "loss_vs_epoch",
-            "mean_vs_x",
-            "mse_vs_x",
-            "nlpd_kde_vs_x",
-            "pit_two_panel",
-            "mse_db_vs_var_db",
-            "nll_kde_heatmap",
-        ],
-        "Overlay": [
-            "mean_vs_x",
-            "mses_vs_epoch",
-            "nlpd_kde_vs_x",
-            "crps_db_vs_nlpd_kde",
-            "crps_db_vs_nlpd_kde_2x2",
-            "mse_db_vs_var_db_2x2",
-        ],
-    }
-
-    analysis = not args.no_analysis
-    save_switch = not args.no_save
-
+    # training save path
     save_path = make_save_path(args.results_root, args.exp_name, args.timestamp)
-    print(f"[main] saving training results under: {save_path}")
+    print(f"[main] Saving runs under: {save_path}")
 
-    exp = SingleTaskExperiment(
-        model_type=model_types,
-        seeds=seeds,
-        model_dict=model_dict,
-        plot_dict=plot_dict,
-    )
-
-    exp.run_experiments(
-        input_data_dict=input_data_dict,
-        epochs=epochs,
-        beta_param_dict=beta_param_dict,
-        checkpoint_dicts=checkpoint_dicts,
-        MC_train=MC_train,
-        MC_val=MC_val,
-        MC_test=MC_test,
-        analysis=analysis,
-        save_switch=save_switch,
-        save_path=save_path,
-        ensemble_epochs=ensemble_epochs,
-    )
+    # run per-seed training
+    for seed in seeds:
+        print(f"\n[main] ==== Training seed {seed} ====")
+        exp = SingleTaskExperiment(
+            model_type=model_type,
+            seeds=[seed],
+            plot_dict=cfg["plot_dict"],
+            model_dict=cfg["model_dict"]
+        )
+        exp.run_experiments(
+            input_data_dict=input_data_dict,
+            epochs=cfg["epochs"],
+            beta_param_dict=cfg["cosine_beta_scheduler"],
+            checkpoint_dicts=cfg["checkpoint_dict"],
+            MC_train=cfg["MC_train"],
+            MC_val=cfg["MC_val"],
+            MC_test=cfg["MC_test"],
+            analysis=False,
+            save_switch=True,
+            save_path=save_path,
+            ensemble_epochs=cfg["ensemble_epochs"],
+        )
 
     # return list of *seed dirs* (each contains model folders)
     seed_dirs = [os.path.join(save_path, f"seed_{s}") for s in seeds]
@@ -740,7 +916,7 @@ def main():
         exp_root, new_seed_dirs = None, None
 
     if args.mode in {"analyze", "train_and_analyze"}:
-        # overlay seed dirs
+        # Determine which seed directories to analyze
         if args.overlay_runs is not None:
             seed_dirs = args.overlay_runs
         elif new_seed_dirs is not None:
@@ -748,15 +924,23 @@ def main():
         else:
             raise ValueError("No seed dirs provided for overlay analysis.")
 
-        overlay_root = exp_root if exp_root is not None else os.path.dirname(seed_dirs[0])
-        run_overlay_analysis(
-            seed_dirs=seed_dirs,
-            out_root=overlay_root,
-            overlay_name=args.overlay_name,
-            run_models=[m.strip() for m in args.models.split(",") if m.strip()],
-            save_tables=True,
-            save_plots=True,
-        )
+        model_list = [m.strip() for m in args.models.split(",") if m.strip()]
+        for sd in seed_dirs:
+            # For train_and_analyze, sd is something like
+            #   <results_root>/single_task_experiment/<exp_name>/seed_<k>
+
+            base_name = args.overlay_name or "overlay"
+            seed_tag = os.path.basename(sd)
+            overlay_name = f"{base_name}_{seed_tag}" if len(seed_dirs) > 1 else base_name
+
+            run_overlay_analysis(
+                seed_dirs=[sd],
+                out_root=sd,
+                overlay_name=overlay_name,
+                run_models=model_list,
+                save_tables=True,
+                save_plots=True,
+            )
 
 
 if __name__ == "__main__":
