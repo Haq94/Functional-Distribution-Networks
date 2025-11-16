@@ -192,3 +192,17 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# Ignore local env/editor crap
+.conda/
+.vscode/
+.virtual_documents/
+anaconda_projects/
+results/
+
+
+
+
+
+
+
