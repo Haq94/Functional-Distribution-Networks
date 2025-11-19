@@ -249,7 +249,12 @@ class SingleTaskTrainer:
 
     def evaluate(self, x, MC=30, sample=True, return_kl=False):
         self.model.eval()
-        x = x.double().to(self.device) if torch.is_tensor(x) else torch.tensor(x, dtype=torch.float64, device=self.device).view(-1, 1)
+        # Keep the original feature dimension [N, D].
+        if torch.is_tensor(x):
+            x = x.double().to(self.device)
+        else:
+            x = torch.tensor(x, dtype=torch.float64, device=self.device)
+            
         N = x.shape[0]
         preds = []
 

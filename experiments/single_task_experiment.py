@@ -16,9 +16,14 @@ from utils.loader.single_task_loader import single_task_overlay_loader
 from utils.general import set_determinism, build_model_dict
 
 class SingleTaskExperiment:
-    def __init__(self, model_type=None, seeds=None, model_dict=None, plot_dict=None):
+    def __init__(self, model_type=None, seeds=None, model_dict=None, plot_dict=None, seed_xgrid=None, seed_function=None):
         self.model_types = ['IC_FDNet', 'LP_FDNet', 'HyperNet', 'BayesNet', 'GaussHyperNet', 'MLPNet', 'MLPDropoutNet', 'DeepEnsembleNet'] if model_type is None else model_type
+        # Seed for model init
         self.seeds = seeds if seeds is not None else [random.randint(0, 1000) for _ in range(3)]
+        # Seed for toy task x-grid
+        self.seed_xgrid = seed_xgrid
+        # Seed for toy task function generation
+        self.seed_function = seed_function
         self.plot_dict = {"Single": [], "Overlay": []} if plot_dict is None else plot_dict
         # self.hidden_dim = hidden_dim
         # self.hyper_hidden_dim = hyper_hidden_dim
@@ -82,8 +87,17 @@ class SingleTaskExperiment:
         # Make dir
         os.makedirs(save_path, exist_ok=True)
 
-        # Load inputs and relevant field if it exists
-        input_data_dict = generate_splits() if input_data_dict is None else input_data_dict 
+        # Load inputs and relevant fields.
+        # If input_data_dict is None, we are in toy mode and can control x-grid via seed_xgrid.
+        if input_data_dict is None:
+            if self.seed_xgrid is not None:
+                input_data_dict = generate_splits(seed=self.seed_xgrid)
+            else:
+                input_data_dict = generate_splits()
+        else:
+            # Real dataset (npz) already provides x/y splits
+            pass
+
         # Unpack dictionary
         region = input_data_dict['region']
         region_interp = input_data_dict['region_interp']
@@ -97,17 +111,29 @@ class SingleTaskExperiment:
         if len(checkpoint_dicts['det']) != 0:
             checkpoint_dicts['det']['region_interp'] = region_interp
 
-        for seed in tqdm(seeds, leave=False):
-            # Set seed
-            set_determinism(seed=seed)
-            # Seed save path
-            seed_save_path = os.path.join(save_path, f'seed_{seed}')
-            # Generate function
-            f, desc = sample_function(seed=seed)
-            # Generate outputs
-            y_train = torch.tensor(f(x_train), dtype=torch.float64)
-            y_val = torch.tensor(f(x_val), dtype=torch.float64)
-            y_test = torch.tensor(f(x_test), dtype=torch.float64)
+        for seed_model in tqdm(seeds, leave=False):
+            # Model-init seed (and general RNG)
+            set_determinism(seed=seed_model)
+
+            # Seed-dependent save path
+            seed_save_path = os.path.join(save_path, f"seed_{seed_model}")
+
+            # ------------------------------------------------------------------
+            # Targets: either real dataset (provided y_*) or toy function f(x)
+            # ------------------------------------------------------------------
+            if input_data_dict is not None and "y_train" in input_data_dict:
+                # Real dataset: same y’s for all seeds
+                y_train = torch.as_tensor(input_data_dict["y_train"], dtype=torch.float64)
+                y_val   = torch.as_tensor(input_data_dict["y_val"],   dtype=torch.float64)
+                y_test  = torch.as_tensor(input_data_dict["y_test"],  dtype=torch.float64)
+                desc    = input_data_dict.get("desc", "real_dataset")
+            else:
+                # Toy: sample function with potentially separate seed
+                seed_f = self.seed_function if self.seed_function is not None else seed_model
+                f, desc = sample_function(seed=seed_f)
+                y_train = torch.tensor(f(x_train), dtype=torch.float64)
+                y_val   = torch.tensor(f(x_val),   dtype=torch.float64)
+                y_test  = torch.tensor(f(x_test),  dtype=torch.float64)
 
             for model_type in tqdm(model_types):
                 # Check if the model is stochastic
@@ -118,7 +144,7 @@ class SingleTaskExperiment:
                 checkpoint_dict = checkpoint_dicts['stoch'] if is_stoch else checkpoint_dicts['det']
 
                 # Base experiment instance
-                exp_inst = BaseExperiment(model_type=model_type, seed=seed, **model_dict[model_type], save_path=seed_save_path)
+                exp_inst = BaseExperiment(model_type=model_type, seed=seed_model, **model_dict[model_type], save_path=seed_save_path)
                 # Choose number of epochs for Deep Ensemble 
                 is_de = (model_type == 'DeepEnsembleNet')
                 epochs_to_use = ensemble_epochs if (is_de and ensemble_epochs != None) else epochs
@@ -168,7 +194,7 @@ class SingleTaskExperiment:
                 plot_single_task_overlay(seed_save_path, region_interp, model_types, stoch_models, stoch_metrics, 
                 model_colors, show_figs=False, use_db_scale=True, plot_types=self.plot_dict['Overlay'])
                 
-            print(f"Completed: {model_type} | seed: {seed} | training time: {training_time}s")
+            print(f"Completed: {model_type} | seed: {seed_model} | training time: {training_time}s")
 
 
 if __name__ == "__main__":

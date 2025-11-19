@@ -6,6 +6,7 @@ from datetime import datetime
 import re
 
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.stats import spearmanr, kendalltau, pearsonr
 
@@ -31,6 +32,16 @@ plt.style.use("utils/plots/iclr.mplstyle")
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="FDN single-task paper script: train + analyze (toy or npz)."
+    )
+
+    parser.add_argument(
+        "--analysis-type",
+        choices=["overlay", "real"],
+        default="overlay",
+        help=(
+            "overlay: 1D toy-style overlay analysis (y vs x, shaded ID/OOD). "
+            "real: high-dimensional real-data analysis (aggregate metrics across seeds)."
+        ),
     )
 
     # ---- high-level mode ----
@@ -73,7 +84,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--exp-name",
         type=str,
-        default="paper_repro",
+        default="paper_repo",
         help="Name of this experiment (subfolder under results_root/single_task_experiment).",
     )
     parser.add_argument(
@@ -95,7 +106,7 @@ def parse_args() -> argparse.Namespace:
         "--seeds",
         type=int,
         nargs="+",
-        default=[7, 8, 9],
+        default=[24, 25, 26],
         help="Training seeds (and default seeds to analyze if mode=train_and_analyze).",
     )
 
@@ -181,6 +192,11 @@ def build_input_data_dict_from_npz(path: str) -> dict:
     missing = [k for k in required if k not in data]
     if missing:
         raise KeyError(f"npz at {path} missing required keys: {missing}")
+    
+    if "id_feature_index" in data:
+        id_feature_index = int(np.asarray(data["id_feature_index"]).item())
+    else:
+        id_feature_index = None
 
     return {
         "x_train": data["x_train"],
@@ -191,6 +207,7 @@ def build_input_data_dict_from_npz(path: str) -> dict:
         "y_test": data["y_test"],
         "region": tuple(data["region"]),
         "region_interp": tuple(data["region_interp"]),
+        "id_feature_index": id_feature_index,
     }
 
 
@@ -300,12 +317,13 @@ def infer_run_name_from_summary(run_summary: dict) -> str | None:
 
 
 def run_overlay_analysis(
-    seed_dirs,
+    seed_dir,
     out_root,
     overlay_name=None,
     run_models=None,
     save_tables=True,
     save_plots=True,
+    feat_dim=None
 ):
     """
     Paper-style overlay analysis: **one task / run at a time**.
@@ -314,10 +332,6 @@ def run_overlay_analysis(
       results/single_task_experiment/<exp_name>/seed_<seed>
     and must contain subfolders named by model type (IC_FDNet, ...).
 
-    For the main paper figs, call this separately for each task/seed:
-      - step
-      - sine
-      - quad
     """
     if run_models is None:
         run_models = [
@@ -347,10 +361,10 @@ def run_overlay_analysis(
             return "LP-FDNet"
         return name
 
-    out_dir = os.path.join(out_root, "paper_figs")
+    out_dir = os.path.join(seed_dir, "paper_figs")
     os.makedirs(out_dir, exist_ok=True)
 
-    print(f"[overlay] analyzing seeds: {seed_dirs}")
+    print(f"[overlay] analyzing seeds: {seed_dir}")
     (
         loaders,
         metrics_test,
@@ -367,7 +381,7 @@ def run_overlay_analysis(
         region_all,
         region_interp_all,
         run_list,
-    ) = single_task_overlay_loader(seed_dirs)
+    ) = single_task_overlay_loader([seed_dir])
 
     # ---- Select single run (paper-style overlay, one task at a time) ----
     if len(run_list) != 1:
@@ -406,8 +420,8 @@ def run_overlay_analysis(
         y_true = y_test.squeeze()
         mean_pred = y_hat_mean.squeeze()
 
-        mse = (mean_pred - y_true) ** 2
-        var = y_hat_var.squeeze()
+        mse = mtest['mse']
+        var = mtest['var']
 
         # Optional metrics
         if "nlpd_kde" in mtest:
@@ -437,11 +451,33 @@ def run_overlay_analysis(
     if not models_present:
         print("[overlay] No models present in provided runs.")
         return
+    
+    # ------------------------------------------------------------
+    # Determine whether test inputs are 1D or multi-dimensional
+    # ------------------------------------------------------------
+    first_x = store[models_present[0]]["x"]
+
+    if first_x.ndim == 1:
+        is_1d_x = True
+    elif first_x.ndim == 2 and first_x.shape[1] == 1:
+        # Column vector -> squeeze to 1D
+        is_1d_x = True
+        for name in models_present:
+            store[name]["x"] = store[name]["x"].reshape(-1)
+        first_x = store[models_present[0]]["x"]
+    else:
+        is_1d_x = False
+        print(
+            f"[overlay] Detected multi-dimensional inputs x.shape={first_x.shape}; "
+            "will skip mean/metric-vs-x panels and treat all points as 'ID' for "
+            "ID/OOD summaries."
+        )
 
     # ---- ID / OOD masks ----
     for name in models_present:
         x = store[name]["x"]
-        interp_mask = (x >= x_min) & (x <= x_max)
+        x_feat_split = x[:, feat_dim].squeeze() if feat_dim is not None else x
+        interp_mask = (x_feat_split >= x_min) & (x_feat_split <= x_max)
         extrap_mask = ~interp_mask
         store[name]["interp_mask"] = interp_mask
         store[name]["extrap_mask"] = extrap_mask
@@ -479,8 +515,6 @@ def run_overlay_analysis(
             auc,
         ])
 
-    import pandas as pd
-
     cols = [
         "Model",
         "MSE(mean)",
@@ -513,7 +547,6 @@ def run_overlay_analysis(
     df_delta = None
     df_region = None
     try:
-        import pandas as pd
         rows = []
         for name in models_present:
             arr = store[name]
@@ -524,14 +557,37 @@ def run_overlay_analysis(
             interp_mask = arr["interp_mask"]
             extrap_mask = arr["extrap_mask"]
 
-            def region_stats(mask, v, m, c):
-                if not np.any(mask):
+            def region_stats(mask, var, mse, crps):
+                """
+                Compute mean MSE, Var, CRPS over a boolean mask.
+                Returns NaN if the mask selects no points.
+                """
+                if mask is None:
                     return np.nan, np.nan, np.nan
-                return (
-                    float(np.mean(m[mask])),
-                    float(np.mean(v[mask])),
-                    float(np.mean(c[mask])) if np.isfinite(c).any() else np.nan,
-                )
+
+                mask = np.asarray(mask, dtype=bool)
+                if mask.ndim > 1:
+                    # Flatten masks that came from multi-d inputs, just in case.
+                    mask = mask.reshape(-1)
+
+                if mask.size == 0 or not np.any(mask):
+                    # No points in this region
+                    return np.nan, np.nan, np.nan
+
+                mse_region = mse[mask]
+                var_region = var[mask]
+
+                mse_mean = float(np.mean(mse_region))
+                var_mean = float(np.mean(var_region))
+
+                if crps is None:
+                    crps_mean = np.nan
+                else:
+                    crps_region = crps[mask]
+                    crps_mean = float(np.mean(crps_region))
+
+                return mse_mean, var_mean, crps_mean
+
 
             mse_id, var_id, crps_id = region_stats(interp_mask, var, mse, crps)
             mse_ood, var_ood, crps_ood = region_stats(extrap_mask, var, mse, crps)
@@ -573,7 +629,7 @@ def run_overlay_analysis(
         print(f"[overlay] delta table failed ({e})")
 
     # --------------------------------------------------------------------------------
-    # PLOTS (same family as delete.py)
+    # PLOTS 
     # --------------------------------------------------------------------------------
     if not save_plots:
         return
@@ -634,7 +690,7 @@ def run_overlay_analysis(
 
     # Use any one model just to get the x-grid and y_true
     first_model = models_present[0]
-    x_plot = store[first_model]["x"]
+    x_plot = x_feat_split
     y_true_plot = store[first_model]["y_true"]
 
     # Shade interpolation (ID) region
@@ -653,7 +709,7 @@ def run_overlay_analysis(
     # Model means
     for name in models_present:
         arr = store[name]
-        x = arr["x"]
+        x = x_feat_split
         mean_pred = arr["mean"]
         order = np.argsort(x)
         ax_mean.plot(
@@ -695,7 +751,7 @@ def run_overlay_analysis(
     ax_mse = axes[0]
     for name in models_present:
         arr = store[name]
-        x = arr["x"]
+        x = x_feat_split
         mse = arr["mse"]
         order = np.argsort(x)
         ax_mse.plot(
@@ -712,7 +768,7 @@ def run_overlay_analysis(
     ax_var = axes[1]
     for name in models_present:
         arr = store[name]
-        x = arr["x"]
+        x = x_feat_split
         v = arr["var"]
         order = np.argsort(x)
         ax_var.plot(
@@ -730,7 +786,7 @@ def run_overlay_analysis(
         ax_crps = axes[2]
         for name in models_present:
             arr = store[name]
-            x = arr["x"]
+            x = x_feat_split
             c = arr["crps"]
             if not np.isfinite(c).any():
                 continue
@@ -849,6 +905,159 @@ def run_overlay_analysis(
     fig.tight_layout()
     save_plot(out_dir, "scatter_interp_extrap", dpi=DPI, fig=fig)
 
+def run_real_data_analysis(
+    seed_dirs,
+    out_root,
+    overlay_name=None,
+    run_models=None,
+    save_tables=True,
+    save_plots=True,
+):
+    """
+    Real-data analysis for high-dimensional datasets.
+
+    - Aggregates metrics across all provided seed_dirs.
+    - Produces a metrics table (RMSE, NLL, CRPS) with mean ± std across seeds.
+    - Optionally produces bar plots with error bars for each metric.
+
+    Notes:
+        - Assumes each seed_dir is a *seed directory* that contains model subfolders.
+        - Uses the same loader infrastructure as run_overlay_analysis, but
+          does NOT assume a 1D x-grid or do any function-vs-x plotting.
+    """
+    import pandas as pd
+
+    print(f"[real-analysis] analyzing seeds: {seed_dirs}")
+    (
+        loaders,
+        metrics_test,
+        metrics_train,
+        metrics_val,
+        losses,
+        summary,
+        x_train_all,
+        y_train_all,
+        x_val_all,
+        y_val_all,
+        x_test_all,
+        y_test_all,
+        region_all,
+        region_interp_all,
+        run_list,
+    ) = single_task_overlay_loader(seed_dirs)
+
+    if not run_list:
+        print("[real-analysis] No runs found.")
+        return
+
+    # Union of all models that appear in any run
+    model_set = set()
+    for run_key in run_list:
+        model_set.update(metrics_test[run_key].keys())
+
+    if run_models is None:
+        run_models = sorted(model_set)
+    else:
+        run_models = [
+            m for m in run_models
+            if any(m in metrics_test[rk] for rk in run_list)
+        ]
+
+    print(f"[real-analysis] models: {run_models}")
+
+    def mean_std(arr):
+        if len(arr) == 0:
+            return np.nan, np.nan
+        v = np.asarray(arr, dtype=float)
+        return float(np.mean(v)), float(np.std(v))
+
+    rows = []
+    for model in run_models:
+        mse_list = []
+        nll_list = []
+        crps_list = []
+
+        for run_key in run_list:
+            mtest = metrics_test[run_key].get(model)
+            if mtest is None:
+                continue
+
+            y_test = y_test_all[run_key].squeeze()
+            mean_pred = mtest["mean"].squeeze()
+
+            # MSE from mean prediction
+            se = (mean_pred - y_test) ** 2
+            mse = float(np.mean(se))
+            mse_list.append(mse)
+
+            # NLL / NLPD
+            if "nlpd_kde" in mtest and np.isfinite(mtest["nlpd_kde"]).any():
+                nll = float(np.nanmean(mtest["nlpd_kde"]))
+            elif "nlpd_hist" in mtest and np.isfinite(mtest["nlpd_hist"]).any():
+                nll = float(np.nanmean(mtest["nlpd_hist"]))
+            else:
+                nll = np.nan
+            nll_list.append(nll)
+
+            # CRPS
+            if "crps" in mtest and np.isfinite(mtest["crps"]).any():
+                crps_list.append(float(np.nanmean(mtest["crps"])))
+            else:
+                crps_list.append(np.nan)
+
+        mse_mean, mse_std = mean_std(mse_list)
+        nll_mean, nll_std = mean_std(nll_list)
+        crps_mean, crps_std = mean_std(crps_list)
+
+        rows.append(
+            {
+                "Model": model,
+                "MSE_mean": mse_mean,
+                "MSE_std": mse_std,
+                "NLL_mean": nll_mean,
+                "NLL_std": nll_std,
+                "CRPS_mean": crps_mean,
+                "CRPS_std": crps_std,
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    df = df.sort_values("MSE_mean")
+
+    # Output dir
+    out_dir = os.path.join(out_root, "real_analysis")
+    os.makedirs(out_dir, exist_ok=True)
+
+    if save_tables:
+        csv_path = os.path.join(out_dir, "real_data_metrics.csv")
+        df.to_csv(csv_path, index=False)
+        print(f"[real-analysis] saved metrics table to {csv_path}")
+
+    if save_plots:
+        # Simple bar plots with error bars for RMSE, NLL, CRPS
+        fig, axes = plt.subplots(
+            1, 3, figsize=(9.0, 3.0), dpi=150, sharex=False
+        )
+        metrics_specs = [
+            ("MSE_mean", "MSE_std", "MSE"),
+            ("NLL_mean", "NLL_std", "NLL"),
+            ("CRPS_mean", "CRPS_std", "CRPS"),
+        ]
+        idx = np.arange(len(df))
+
+        for ax, (m_mean, m_std, label) in zip(axes, metrics_specs):
+            vals = df[m_mean].values
+            errs = df[m_std].values
+            ax.bar(idx, vals, yerr=errs, capsize=3)
+            ax.set_title(label)
+            ax.set_xticks(idx)
+            ax.set_xticklabels(df["Model"].values, rotation=30, ha="right")
+            ax.grid(axis="y", alpha=0.3)
+
+        fig.tight_layout()
+        save_plot(out_dir, "real_data_metrics_bars", dpi=150, fig=fig)
+
+    print("[real-analysis] done.")
 
 # -----------------------------------------------------------------------------------
 # TRAINING DRIVER
@@ -909,38 +1118,139 @@ def run_training_and_get_seed_dirs(args: argparse.Namespace) -> (str, list):
 
 def main():
     args = parse_args()
+    debug_data = "npz"
+    if debug_data == "npz":
+        # ===== DEBUG RIG – TEMPORARY =====
+        args.mode = "train_and_analyze"          # train + analyze in one go
+        args.dataset_mode = "npz"                # NOT 'realdata' – choices are ['toy', 'npz']
 
+        args.data_path = os.path.join("data", "uci_npz", "airfoil_self_noise_feat_dim_0.npz")
+        args.exp_name = "airfoil_debug_cosine_beta_max_1"
+
+        # args.data_path = os.path.join("data", "uci_npz", "energy_efficiency_heating_feat_dim_0.npz")
+        # args.exp_name = "energy_efficiency_heating_cosine_beta_max_0.01"
+
+        args.analysis_type = "real"              # use the real-data analysis, not overlay
+        args.seeds = [7, 8]                         # or [0,1,2] etc. if parse_args allows list
+        # ==================================
+    elif debug_data == "toy":
+        # ===== DEBUG RIG – TEMPORARY (TOY TASK) =====
+        args.mode = "train_and_analyze"      # train + analyze in one go
+        args.dataset_mode = "toy"            # use toy generator
+        args.exp_name = "toy_debug_2epochs"  # results/single_task_experiment/toy_debug_2epochs
+        args.analysis_type = "overlay"       # 1D overlay analysis (default)
+        args.data_seed = 0                   # seed for x-grid / toy splits
+        args.seeds = [0]                     # training seed(s) = model + function seed for now
+        # Optionally restrict models while debugging:
+        # args.models = "IC_FDNet,LP_FDNet,BayesNet"
+        # ===========================================
+
+    # ------------------------------------------------------------------
+    # Optional training phase
+    # ------------------------------------------------------------------
     if args.mode in {"train", "train_and_analyze"}:
+        # Trains for the requested seeds and returns their seed_* dirs.
         exp_root, new_seed_dirs = run_training_and_get_seed_dirs(args)
     else:
-        exp_root, new_seed_dirs = None, None
+        exp_root, new_seed_dirs = os.path.join('results', 'single_task_experiment', args.exp_name), []
 
+    # ------------------------------------------------------------------
+    # Optional analysis phase
+    # ------------------------------------------------------------------
     if args.mode in {"analyze", "train_and_analyze"}:
-        # Determine which seed directories to analyze
+        # Decide which seed directories to analyze
+        seed_dirs: list[str] = []
+
+        # 1) Explicit --overlay-runs argument
         if args.overlay_runs is not None:
-            seed_dirs = args.overlay_runs
-        elif new_seed_dirs is not None:
-            seed_dirs = new_seed_dirs
-        else:
-            raise ValueError("No seed dirs provided for overlay analysis.")
+            # args.overlay_runs is a list of paths; each can be:
+            #   - a seed directory:   .../seed_7
+            #   - a parent directory: .../paper_repo  (containing seed_* subdirs)
+            for p in args.overlay_runs:
+                p = os.path.normpath(p)
+                if not os.path.isdir(p):
+                    raise ValueError(
+                        f"--overlay-runs path does not exist or is not a directory: {p}"
+                    )
 
-        model_list = [m.strip() for m in args.models.split(",") if m.strip()]
-        for sd in seed_dirs:
-            # For train_and_analyze, sd is something like
-            #   <results_root>/single_task_experiment/<exp_name>/seed_<k>
+                base = os.path.basename(p)
+                if base.startswith("seed"):
+                    # Directly a seed directory
+                    seed_dirs.append(p)
+                else:
+                    # Treat as parent; collect immediate seed_* children
+                    for name in os.listdir(p):
+                        full = os.path.join(p, name)
+                        if os.path.isdir(full) and name.startswith("seed"):
+                            seed_dirs.append(full)
 
-            base_name = args.overlay_name or "overlay"
-            seed_tag = os.path.basename(sd)
-            overlay_name = f"{base_name}_{seed_tag}" if len(seed_dirs) > 1 else base_name
+        # 2) Seeds from the training phase in this same call
+        if not seed_dirs and new_seed_dirs:
+            seed_dirs = list(new_seed_dirs)
 
-            run_overlay_analysis(
-                seed_dirs=[sd],
-                out_root=sd,
-                overlay_name=overlay_name,
-                run_models=model_list,
-                save_tables=True,
-                save_plots=True,
+        # 3) Fallback: discover seeds under the expected experiment root
+        if not seed_dirs:
+            if exp_root is None:
+                exp_root = os.path.join(
+                    args.results_root, "single_task_experiment", args.exp_name
+                )
+            if os.path.isdir(exp_root):
+                for name in os.listdir(exp_root):
+                    full = os.path.join(exp_root, name)
+                    if os.path.isdir(full) and name.startswith("seed"):
+                        seed_dirs.append(full)
+
+        if not seed_dirs:
+            raise ValueError(
+                "No seed directories found for analysis. "
+                "Use --overlay-runs or run with mode=train_and_analyze so that "
+                "new results are available."
             )
+
+        # Make paths unique and deterministic
+        seed_dirs = sorted(set(seed_dirs))
+
+        # Models to analyze (all paper models by default)
+        model_list = list(baseline_params["model_dict"].keys())
+
+        if args.analysis_type == "overlay":
+            # Paper-style 1D overlay: do one run/seed at a time
+            for sd in seed_dirs:
+                seed_tag = Path(sd).name
+                base_name = args.overlay_name or seed_tag
+                overlay_name = args.overlay_name if args.overlay_name is not None else seed_tag
+
+                run_overlay_analysis(
+                    seed_dir=[sd],
+                    out_root=sd,          # saves into that seed_* directory
+                    overlay_name=overlay_name,
+                    run_models=model_list,
+                    save_tables=True,
+                    save_plots=True,
+                )
+        else:
+            # Real-data, multi-seed analysis: aggregate over all seed_dirs
+            base_name = args.overlay_name or "real_data"
+
+            # Put the real-data summary one level above the seed dirs
+            common_root = os.path.commonpath(seed_dirs)
+            if os.path.basename(common_root).startswith("seed"):
+                common_root = os.path.dirname(common_root)
+
+            # Feature dimension where the split occurs
+            feat_dim = int(os.path.basename(args.data_path).replace(".npz", "").split("_")[-1])
+
+            for seed_dir in seed_dirs:
+                run_overlay_analysis(
+                    seed_dir=seed_dir,
+                    out_root=common_root,
+                    overlay_name=base_name,
+                    run_models=model_list,
+                    save_tables=True,
+                    save_plots=True,
+                    feat_dim=feat_dim,
+                )
+
 
 
 if __name__ == "__main__":
