@@ -40,7 +40,7 @@ python main.py \
 python main.py \
   --mode train_and_analyze \
   --dataset-mode npz \
-  --analysis-type real \
+  --analysis-type overlay \
   --data-path data/uci_npz/airfoil_self_noise_feat_dim_0.npz \
   --exp-name airfoil_quickcheck \
   --models IC_FDNet,LP_FDNet,BayesNet,GaussHyperNet,MLPDropoutNet,DeepEnsembleNet \
