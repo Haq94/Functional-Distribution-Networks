@@ -66,7 +66,7 @@ linear_beta_scheduler = {
 cosine_beta_scheduler = {
     "beta_scheduler": "cosine",
     "warmup_epochs": epochs // 2,
-    "beta_max": 1.0,
+    "beta_max": 0.01,
 }
 sigmoid_beta_scheduler = {
     "beta_scheduler": "sigmoid",

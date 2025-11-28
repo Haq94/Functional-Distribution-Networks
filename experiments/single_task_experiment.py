@@ -94,9 +94,6 @@ class SingleTaskExperiment:
                 input_data_dict = generate_splits(seed=self.seed_xgrid)
             else:
                 input_data_dict = generate_splits()
-        else:
-            # Real dataset (npz) already provides x/y splits
-            pass
 
         # Unpack dictionary
         region = input_data_dict['region']

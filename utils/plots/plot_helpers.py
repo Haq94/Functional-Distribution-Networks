@@ -30,23 +30,28 @@ def label_subplots(axes, labels=None, x_offset=-0.1, y_offset=1.05, fontsize=8):
 
 def iclr_figsize(layout="single"):
     """
-    Return ICLR-ready figure sizes.
-    layout: 'single', 'double', '2x2'
+    Convenience function for ICLR-style figure sizes.
     """
     if layout == "single":
         return (3.5, 2.5)   # single column
     elif layout == "double":
         return (7.0, 2.8)   # two panels side by side
     elif layout == "stacked":
-        return (7.0, 4.2)   # two panel stacked
+        return (7.0, 4.2)   # two panels stacked
     elif layout == "2x2":
         return (7.0, 4.2)   # 2x2 panel figure
+    elif layout in ("3x1", "row3"):
+        return (7.0, 2.6)   # three panels in a row
     elif layout == "4x1":
-        return (7.0, 2.2)    # four panels in a row (shorter height)
+        return (7.0, 2.2)   # four panels in a row
     elif layout == "1x4":
-        return (7.0, 8.8)    # four stacked panels (~2.2" each)
+        return (7.0, 8.8)   # four stacked panels
     else:
-        raise ValueError("layout must be 'single', 'double', or '2x2'")
+        raise ValueError(
+            "layout must be one of "
+            "'single', 'double', 'stacked', '2x2', '3x1', '4x1', '1x4'"
+        )
+
     
 
 def merge_and_sort_by_x(*xy_pairs):

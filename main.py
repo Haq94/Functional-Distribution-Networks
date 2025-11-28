@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--analysis-type",
-        choices=["overlay", "real"],
+        choices=["overlay"],
         default="overlay",
         help=(
             "overlay: 1D toy-style overlay analysis (y vs x, shaded ID/OOD). "
@@ -47,7 +47,7 @@ def parse_args() -> argparse.Namespace:
     # ---- high-level mode ----
     parser.add_argument(
         "--mode",
-        choices=["train", "analyze", "train_and_analyze"],
+        choices=["train", "analyze", "train_and_analyze", "seed_agg"],
         default="train",
         help="train: only train; analyze: only overlay analysis; "
              "train_and_analyze: train then run overlay analysis on resulting seeds.",
@@ -72,6 +72,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help="Seed for toy data split.",
+    )
+    parser.add_argument(
+        "--toy-func-seeds",
+        type=int,
+        default=0,
+        help="Seed for toy function generation.",
     )
 
     # ---- experiment naming / saving ----
@@ -110,6 +116,14 @@ def parse_args() -> argparse.Namespace:
         help="Training seeds (and default seeds to analyze if mode=train_and_analyze).",
     )
 
+    # ---- beta scheduler ----
+    parser.add_argument(
+    "--beta-scheduler",
+    type=str,
+    default='linear_beta_scheduler',
+    help="Beta scheduler for runs.",
+    )
+
     # ---- overlay-analysis options (for mode=analyze / train_and_analyze) ----
     parser.add_argument(
         "--overlay-runs",
@@ -129,6 +143,32 @@ def parse_args() -> argparse.Namespace:
     )
 
     return parser.parse_args()
+
+
+def find_seed_dirs(root: str):
+    """
+    Recursively find all 'seed_*' directories under `root`.
+
+    This works both for layouts like:
+        root/seed_7/...
+    and nested toy layouts like:
+        root/toy_seed_26/seed_7/...
+
+    Returns a sorted list of absolute paths.
+    """
+    root = os.path.abspath(root)
+    seed_dirs = []
+
+    for dirpath, dirnames, _ in os.walk(root):
+        for d in dirnames:
+            if d.startswith("seed_"):
+                seed_dirs.append(os.path.join(dirpath, d))
+
+    seed_dirs = sorted(seed_dirs)
+    print(f"[post-seed-agg] Found {len(seed_dirs)} seed_* dirs under {root}")
+    for sd in seed_dirs:
+        print(f"    {sd}")
+    return seed_dirs
 
 
 # -----------------------------------------------------------------------------------
@@ -222,7 +262,7 @@ def make_save_path(results_root: str, exp_name: str, timestamp: bool) -> str:
 
 
 # -----------------------------------------------------------------------------------
-# OVERLAY ANALYSIS (modularized delete.py)
+# OVERLAY ANALYSIS 
 # -----------------------------------------------------------------------------------
 
 def lin_fit_mse_on_var(var, mse):
@@ -633,58 +673,157 @@ def run_overlay_analysis(
     # --------------------------------------------------------------------------------
     if not save_plots:
         return
+    
+    ID_SHADE_COLOR = "0.8"   # darker gray
+    ID_SHADE_ALPHA = 0.6     # more opaque
 
     # (1) MSE vs Var scatter + linear fits
-    fig, ax = plt.subplots(1, 1, figsize=iclr_figsize(layout="single"), dpi=DPI)
+    fig, ax = plt.subplots(
+        1, 1,
+        figsize=iclr_figsize(layout="double"),
+        dpi=DPI,
+    )
+
     vmin = min(store[n]["var"].min() for n in models_present)
     vmax = max(store[n]["var"].max() for n in models_present)
     xline = np.linspace(vmin, vmax, 200)
+
+    # ideal line
+    ax.plot([0, vmax], [0, vmax], "k--", lw=1, label="Ideal: MSE=Var")
+
     for name in models_present:
         arr = store[name]
-        ax.scatter(arr["var"], arr["mse"], s=8, alpha=0.4, color=arr["color"])
+        ax.scatter(
+            arr["var"],
+            arr["mse"],
+            s=8,
+            alpha=0.4,
+            color=arr["color"],
+        )
         a, b = arr["a"], arr["b"]
-        ax.plot(xline, a + b * xline, lw=1.6, color=arr["color"],
-                label=f'{arr["label"]} (a={a:.2g}, b={b:.2g})')
+        ax.plot(
+            xline,
+            a + b * xline,
+            lw=1.6,
+            color=arr["color"],
+            label=f'{arr["label"]} (a={a:.2g}, b={b:.2g})',
+        )
+
     ax.set_xlabel("Predicted variance")
     ax.set_ylabel("Empirical MSE")
     ax.grid(alpha=0.3)
-    ax.legend(frameon=False, ncol=2, fontsize=9)
+
+    # layout axes first
     fig.tight_layout()
+    # carve out space at top for legend
+    fig.subplots_adjust(top=0.80)
+
+    # figure-level legend on top
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.97),
+        ncol=3,
+        frameon=False,
+        fontsize=7,
+    )
+
     save_plot(out_dir, "mse_vs_var_scatter", dpi=DPI, fig=fig)
 
+
     # (2) Calibration curve: binned MSE vs var
-    fig, ax = plt.subplots(1, 1, figsize=iclr_figsize(layout="single"), dpi=DPI)
+    fig, ax = plt.subplots(
+        1, 1,
+        figsize=iclr_figsize(layout="double"),
+        dpi=DPI,
+    )
+
     ylim = max(store[n]["var"].max() for n in models_present)
     ax.plot([0, ylim], [0, ylim], "k--", lw=1, label="Ideal: y=x")
+
     for name in models_present:
-        mid, emse, pvar = binned_calibration(store[name]["var"], store[name]["mse"], nbins=20)
-        ax.plot(pvar, emse, "o-", ms=4, lw=1,
-                color=store[name]["color"], label=store[name]["label"])
+        mid, emse, pvar = binned_calibration(
+            store[name]["var"],
+            store[name]["mse"],
+            nbins=20,
+        )
+        ax.plot(
+            pvar, emse,
+            "o-",
+            ms=4,
+            lw=1,
+            color=store[name]["color"],
+            label=store[name]["label"],
+        )
+
     ax.set_xlabel("Predicted variance (bin mean)")
     ax.set_ylabel("Empirical MSE (bin mean)")
     ax.grid(alpha=0.3)
-    ax.legend(frameon=False, ncol=3, fontsize=9)
+
+    # layout axes
     fig.tight_layout()
+    fig.subplots_adjust(top=0.80)
+
+    # figure-level legend above the axis
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.97),
+        ncol=3,
+        frameon=False,
+        fontsize=7,
+    )
+
     save_plot(out_dir, "calibration_curve", dpi=DPI, fig=fig)
 
+
+
     # (3) Risk–Coverage
-    fig, ax = plt.subplots(1, 1, figsize=iclr_figsize(layout="single"), dpi=DPI)
+    fig, ax = plt.subplots(
+        1, 1,
+        figsize=iclr_figsize(layout="double"),   # was "single"
+        dpi=DPI,
+    )
+
     for name in models_present:
         arr = store[name]
-        ax.plot(arr["cov"], arr["risk"], lw=1.6, color=arr["color"],
-                label=f'{arr["label"]} (AURC={arr["aurc"]:.3f})')
+        ax.plot(
+            arr["cov"],
+            arr["risk"],
+            lw=1.6,
+            color=arr["color"],
+            label=f'{arr["label"]} (AURC={arr["aurc"]:.3f})',
+        )
+
     ax.set_xlabel("Coverage")
     ax.set_ylabel("Risk (cumulative mean MSE)")
     ax.grid(alpha=0.3)
-    ax.legend(frameon=False, ncol=2, fontsize=9)
-    fig.tight_layout()
+
+    # --- shared legend on top ---
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.02),
+        ncol=3,
+        frameon=False,
+        fontsize=7,
+    )
+
+    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.90])
     save_plot(out_dir, "risk_coverage", dpi=DPI, fig=fig)
+
 
     # (4) Predictive mean vs x (with ground truth and ID region shaded)
     # -----------------------------------------------------------------
     fig_mean, ax_mean = plt.subplots(
         1, 1,
-        figsize=iclr_figsize(layout="single"),
+        figsize=iclr_figsize(layout="double"),
         dpi=DPI,
     )
 
@@ -694,7 +833,12 @@ def run_overlay_analysis(
     y_true_plot = store[first_model]["y_true"]
 
     # Shade interpolation (ID) region
-    ax_mean.axvspan(x_min, x_max, color="0.9", alpha=0.4, zorder=0)
+    ax_mean.axvspan(
+        x_min, x_max,
+        color=ID_SHADE_COLOR,
+        alpha=ID_SHADE_ALPHA,
+        zorder=0,
+    )
 
     # Ground truth curve
     order = np.argsort(x_plot)
@@ -723,29 +867,41 @@ def run_overlay_analysis(
     ax_mean.set_ylabel("Mean")
     ax_mean.set_xlabel("x")
     ax_mean.grid(alpha=0.3)
-    ax_mean.legend(frameon=False, ncol=2, fontsize=8)
+
+    ax_mean.legend(
+        loc="center right",
+        bbox_to_anchor=(-0.32, 0.5),
+        frameon=False,
+        fontsize=7,
+        borderaxespad=0.0,
+    )
 
     fig_mean.tight_layout()
     save_plot(out_dir, "mean_vs_x_with_truth", dpi=DPI, fig=fig_mean)
 
     # (5) MSE, variance, and CRPS vs x (1×3 row, ID region shaded)
     # -------------------------------------------------------------
-    # Check whether we have any non-NaN CRPS at all
     have_crps = any(np.isfinite(store[n]["crps"]).any() for n in models_present)
 
     n_cols = 3 if have_crps else 2
     fig, axes = plt.subplots(
         1, n_cols,
-        figsize=(9.0, 3.0),  # tweak if you want wider/narrower
+        figsize=iclr_figsize(layout="3x1"),
         dpi=DPI,
         sharex=True,
     )
+
     if n_cols == 1:
         axes = [axes]
 
     # Shade interpolation (ID) region in all subplots
     for ax in axes:
-        ax.axvspan(x_min, x_max, color="0.9", alpha=0.4, zorder=0)
+        ax.axvspan(
+            x_min, x_max,
+            color=ID_SHADE_COLOR,
+            alpha=ID_SHADE_ALPHA,
+            zorder=0,
+        )
 
     # Col 1: MSE vs x
     ax_mse = axes[0]
@@ -801,16 +957,60 @@ def run_overlay_analysis(
         ax_crps.set_ylabel("CRPS")
         ax_crps.grid(alpha=0.3)
 
-    # Common x-label
-    axes[-1].set_xlabel("x")
+    # Put a single x-label on the middle axis for symmetry
+    mid = len(axes) // 2
+    for i, ax in enumerate(axes):
+        ax.set_xlabel("x" if i == mid else "")
 
-    # No (a),(b),(c) labels here
-    fig.tight_layout()
+    # ---------- shared legend above the row ----------
+    handles, labels = axes[0].get_legend_handles_labels()
+
+    # optional: deduplicate labels (just in case)
+    seen = set()
+    uniq_handles, uniq_labels = [], []
+    for h, lab in zip(handles, labels):
+        if lab not in seen:
+            seen.add(lab)
+            uniq_handles.append(h)
+            uniq_labels.append(lab)
+
+    fig.legend(
+        uniq_handles,
+        uniq_labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.02),
+        ncol=3,          # tweak if needed
+        frameon=False,
+        fontsize=7,
+    )
+
+    # leave room at the top for the legend
+    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.90])
     save_plot(out_dir, "mse_var_crps_vs_x", dpi=DPI, fig=fig)
 
 
     # (6) Delta bar charts: ΔMSE / ΔVar / ΔCRPS as 1×3 row (left-to-right)
     if df_delta is not None:
+        # --- Enforce a consistent model order -------------------------------
+        # df_delta["Model"] likely has display names like "IC-FDNet"
+        # model_colors is keyed by internal names like "IC_FDNet"
+        all_labels = df_delta["Model"].values.tolist()
+
+        ordered_labels = []
+        for internal_name in model_colors.keys():
+            display_name = internal_name.replace("_", "-")
+            if display_name in all_labels:
+                ordered_labels.append(display_name)
+
+        # If we found a non-empty ordering, reorder df_delta to match
+        if ordered_labels:
+            df_delta = (
+                df_delta.set_index("Model")
+                        .loc[ordered_labels]
+                        .reset_index()
+            )
+
+        # --------------------------------------------------------------------
         labels = df_delta["Model"].values
         idx = np.arange(len(labels))
         colors = [model_colors.get(m.replace("-", "_"), "#777") for m in labels]
@@ -825,7 +1025,7 @@ def run_overlay_analysis(
         n_cols = len(metric_specs)
         fig, axes = plt.subplots(
             1, n_cols,
-            figsize=(9.0, 3.0),  # tweak width/height as needed
+            figsize=iclr_figsize("3x1"),  # tweak width/height as needed
             dpi=DPI,
             sharey=False,
         )
@@ -844,9 +1044,9 @@ def run_overlay_analysis(
             ax.set_xticks(idx)
             ax.set_xticklabels(labels, rotation=30, ha="right")
 
-        # No (a), (b), (c) labels here
         fig.tight_layout()
         save_plot(out_dir, "delta_bars_MSE_Var_CRPS", dpi=DPI, fig=fig)
+
 
 
     # (7) Scatter: MSE vs Var in Interp vs Extrap regions
@@ -861,32 +1061,64 @@ def run_overlay_analysis(
         xline = np.linspace(vmin, vmax, 200)
         ax.plot(xline, xline, "k--", lw=1, label="Ideal: MSE=Var")
 
-    fig, axes = plt.subplots(1, 2, figsize=iclr_figsize(layout="double"), dpi=DPI, sharey=True)
+    fig, axes = plt.subplots(
+        1, 2,
+        figsize=iclr_figsize(layout="double"),
+        dpi=DPI,
+        sharey=True,
+    )
     all_vars_i, all_vars_o = [], []
 
     for name in models_present:
         arr = store[name]
         c = arr["color"]
         lab = arr["label"]
-        x = arr["x"]
-        v = arr["var"]
-        m = arr["mse"]
+
+        x = x_feat_split           # shape [N]
+        v = arr["var"]             # shape [N]
+        m = arr["mse"]             # shape [N]
         interp_mask = arr["interp_mask"]
         extrap_mask = arr["extrap_mask"]
 
+        # you actually don't need sorting for scatter, but it's harmless:
         order = np.argsort(x)
         vi = v[order][interp_mask[order]]
         mi = m[order][interp_mask[order]]
         vo = v[order][extrap_mask[order]]
         mo = m[order][extrap_mask[order]]
 
+        def _format_rho(r):
+            if r is None or np.isnan(r):
+                return "N/A"
+            return f"{r:.2f}"
+
         rho_i = safe_spearman(vi, mi)
         rho_o = safe_spearman(vo, mo)
 
-        axes[0].scatter(vi, mi, s=10, alpha=0.35, color=c,
-                        label=f"{lab} (ρ={np.nan if np.isnan(rho_i) else rho_i:.2f})")
-        axes[1].scatter(vo, mo, s=10, alpha=0.35, color=c,
-                        label=f"{lab} (ρ={np.nan if np.isnan(rho_o) else rho_o:.2f})")
+        # Build a mathtext label with subscripts
+        rho_label = (
+            rf"$\rho_{{\mathrm{{ID}}}}$={_format_rho(rho_i)}, "
+            rf"$\rho_{{\mathrm{{OOD}}}}$={_format_rho(rho_o)}"
+        )
+
+        # ID panel: no legend entry
+        axes[0].scatter(
+            vi, mi,
+            s=10,
+            alpha=0.35,
+            color=c,
+            label="_nolegend_",
+        )
+
+        # OOD panel: legend label uses LaTeX-style subscripts
+        axes[1].scatter(
+            vo, mo,
+            s=10,
+            alpha=0.35,
+            color=c,
+            label=f"{lab} ({rho_label})",
+        )
+
 
         all_vars_i.append(vi)
         all_vars_o.append(vo)
@@ -897,167 +1129,251 @@ def run_overlay_analysis(
     for ax in axes:
         ax.set_xlabel("Variance")
         ax.grid(alpha=0.3)
-        ax.legend(frameon=False, ncol=2, fontsize=8)
+
     axes[0].set_ylabel("MSE")
     axes[0].set_title("Interp (ID)")
     axes[1].set_title("Extrap (OOD)")
-    # label_subplots(axes)
+
+    # Single legend, outside on the left, based on OOD axis
+    handles, labels = axes[1].get_legend_handles_labels()
+    axes[1].legend(
+        handles,
+        labels,
+        loc="center right",
+        bbox_to_anchor=(-0.30, 0.5),
+        frameon=False,
+        fontsize=7,
+        borderaxespad=0.0,
+    )
+
     fig.tight_layout()
     save_plot(out_dir, "scatter_interp_extrap", dpi=DPI, fig=fig)
 
-def run_real_data_analysis(
-    seed_dirs,
-    out_root,
-    overlay_name=None,
-    run_models=None,
-    save_tables=True,
-    save_plots=True,
-):
+
+
+def post_seed_agg(args):
     """
-    Real-data analysis for high-dimensional datasets.
+    Aggregate metrics over existing seed_* runs for a given experiment.
 
-    - Aggregates metrics across all provided seed_dirs.
-    - Produces a metrics table (RMSE, NLL, CRPS) with mean ± std across seeds.
-    - Optionally produces bar plots with error bars for each metric.
+    If args.debug_data == "toy":
+        - look for toy_seed_* subdirectories under
+          results/single_task_experiment/args.exp_name
+        - aggregate separately inside each toy_seed_*.
 
-    Notes:
-        - Assumes each seed_dir is a *seed directory* that contains model subfolders.
-        - Uses the same loader infrastructure as run_overlay_analysis, but
-          does NOT assume a 1D x-grid or do any function-vs-x plotting.
+    Otherwise:
+        - aggregate directly in results/single_task_experiment/args.exp_name
+          over all seed_* folders.
     """
-    import pandas as pd
+    root = Path("results") / "single_task_experiment" / args.exp_name
+    is_toy = getattr(args, "dataset_mode", "") == "toy"
 
-    print(f"[real-analysis] analyzing seeds: {seed_dirs}")
-    (
-        loaders,
-        metrics_test,
-        metrics_train,
-        metrics_val,
-        losses,
-        summary,
-        x_train_all,
-        y_train_all,
-        x_val_all,
-        y_val_all,
-        x_test_all,
-        y_test_all,
-        region_all,
-        region_interp_all,
-        run_list,
-    ) = single_task_overlay_loader(seed_dirs)
+    if is_toy:
+        toy_roots = sorted(
+            p for p in root.iterdir()
+            if p.is_dir() and p.name.startswith("toy_seed_")
+        )
+        if not toy_roots:
+            print(f"[post_seed_agg] No toy_seed_* folders under {root}")
+            return
+        for tr in toy_roots:
+            _aggregate_one_root(tr)
+    else:
+        _aggregate_one_root(root)
 
-    if not run_list:
-        print("[real-analysis] No runs found.")
+
+def _aggregate_one_root(seed_root: Path) -> None:
+    """
+    seed_root: folder that contains seed_* subdirs,
+               each with paper_figs/summary_main.csv (and optionally
+               paper_figs/delta_id_to_ood.csv).
+
+    Writes:
+      - seed_root/summary_seed_agg_by_model.csv
+      - seed_root/summary_seed_representative_runs_by_model.csv
+      - seed_root/summary_seed_representative_FDN.txt
+      - seed_root/seed_agg_scatter_MSE_OOD_vs_Var_OOD.png
+    """
+    seed_dirs = sorted(
+        p for p in seed_root.iterdir()
+        if p.is_dir() and p.name.startswith("seed_")
+    )
+
+    if not seed_dirs:
+        print(f"[post_seed_agg] No seed_* folders under {seed_root}")
         return
 
-    # Union of all models that appear in any run
-    model_set = set()
-    for run_key in run_list:
-        model_set.update(metrics_test[run_key].keys())
+    dfs = []
+    for sd in seed_dirs:
+        figs_dir = sd / "paper_figs"
 
-    if run_models is None:
-        run_models = sorted(model_set)
-    else:
-        run_models = [
-            m for m in run_models
-            if any(m in metrics_test[rk] for rk in run_list)
-        ]
+        main_path = figs_dir / "summary_main.csv"
+        if not main_path.exists():
+            print(f"[post_seed_agg] Skipping {sd}: missing summary_main.csv")
+            continue
 
-    print(f"[real-analysis] models: {run_models}")
+        df_main = pd.read_csv(main_path)
 
-    def mean_std(arr):
-        if len(arr) == 0:
-            return np.nan, np.nan
-        v = np.asarray(arr, dtype=float)
-        return float(np.mean(v)), float(np.std(v))
+        # Try to merge in ID/OOD metrics if available
+        delta_path = figs_dir / "delta_id_to_ood.csv"
+        if delta_path.exists():
+            df_delta = pd.read_csv(delta_path)
+            # Merge on 'Model'; summary_main and delta only overlap on 'Model'
+            df = df_main.merge(df_delta, on="Model", how="left")
+        else:
+            df = df_main
 
-    rows = []
-    for model in run_models:
-        mse_list = []
-        nll_list = []
-        crps_list = []
+        df["seed_dir"] = sd.name
+        dfs.append(df)
 
-        for run_key in run_list:
-            mtest = metrics_test[run_key].get(model)
-            if mtest is None:
+    if not dfs:
+        print(f"[post_seed_agg] No usable CSV files found under {seed_root}")
+        return
+
+    df_all = pd.concat(dfs, ignore_index=True)
+
+    # Identify numeric metric columns (drop the seed_dir index itself)
+    numeric_cols = df_all.select_dtypes(include=[np.number]).columns.tolist()
+    metric_cols = [c for c in numeric_cols if c != "seed_dir"]
+
+    if not metric_cols:
+        print(f"[post_seed_agg] No numeric metric columns found under {seed_root}")
+        return
+
+    # ------------------------------------------------------------------
+    # 1) Aggregate stats by model
+    # ------------------------------------------------------------------
+    grouped = df_all.groupby("Model")[metric_cols]
+
+    df_mean = grouped.mean().add_suffix("_mean")
+    df_std  = grouped.std(ddof=0).add_suffix("_std")
+    df_med  = grouped.median().add_suffix("_median")
+
+    stats = pd.concat([df_mean, df_std, df_med], axis=1)
+    stats.to_csv(seed_root / "summary_seed_agg_by_model.csv")
+
+    # ------------------------------------------------------------------
+    # 2) Representative row (seed) per MODEL
+    #    (same idea as before, just using the extended metric set)
+    # ------------------------------------------------------------------
+    repr_rows = []
+    for model, df_m in df_all.groupby("Model"):
+        med_vec = df_m[metric_cols].median(axis=0)
+        diff = ((df_m[metric_cols] - med_vec) ** 2).sum(axis=1)
+        best_idx = diff.idxmin()
+
+        row = df_m.loc[best_idx].copy()
+        row["dist_to_model_median"] = float(diff.loc[best_idx])
+        repr_rows.append(row)
+
+    df_repr = pd.DataFrame(repr_rows)
+    df_repr.to_csv(
+        seed_root / "summary_seed_representative_runs_by_model.csv",
+        index=False,
+    )
+
+    # ------------------------------------------------------------------
+    # 3) Single representative SEED for the FDNs
+    #    (IC-FDNet + LP-FDNet jointly, non-cherry-picked)
+    # ------------------------------------------------------------------
+    FDN_MODELS = ["IC-FDNet", "LP-FDNet"]
+
+    df_fd = df_all[df_all["Model"].isin(FDN_MODELS)].copy()
+    if not df_fd.empty:
+        # Use a core subset of metrics; fall back to all metrics if missing
+        desired_metrics = ["MSE(OOD)", "Var(OOD)", "ΔCRPS", "AURC"]
+        metrics_sel = [m for m in desired_metrics if m in df_fd.columns]
+        if not metrics_sel:
+            metrics_sel = metric_cols  # fallback: all numeric metrics
+
+        # median vector for each FDN model
+        med_by_model: dict[str, pd.Series] = {}
+        for m in FDN_MODELS:
+            df_m = df_fd[df_fd["Model"] == m]
+            if df_m.empty:
                 continue
+            med_by_model[m] = df_m[metrics_sel].median(axis=0)
 
-            y_test = y_test_all[run_key].squeeze()
-            mean_pred = mtest["mean"].squeeze()
+        # distance of each seed_dir to these medians (summed over FDN models)
+        seed_dists: dict[str, float] = {}
+        for seed_name, df_seed in df_fd.groupby("seed_dir"):
+            total = 0.0
+            used_any = False
+            for m in FDN_MODELS:
+                if m not in med_by_model:
+                    continue
+                row_m = df_seed[df_seed["Model"] == m]
+                if row_m.empty:
+                    continue
+                vec = row_m[metrics_sel].iloc[0]
+                diff = vec - med_by_model[m]
+                total += float((diff ** 2).sum())
+                used_any = True
+            if used_any:
+                seed_dists[seed_name] = total
 
-            # MSE from mean prediction
-            se = (mean_pred - y_test) ** 2
-            mse = float(np.mean(se))
-            mse_list.append(mse)
+        if seed_dists:
+            best_seed = min(seed_dists, key=seed_dists.get)
+            out_path = seed_root / "summary_seed_representative_FDN.txt"
+            with open(out_path, "w") as f:
+                f.write(
+                    "Representative seed (closest to FDN median):\n"
+                    f"  seed_dir = {best_seed}\n"
+                    f"  dist     = {seed_dists[best_seed]:.6g}\n"
+                )
+            print(
+                f"[post_seed_agg] FDN-representative seed for {seed_root}: "
+                f"{best_seed}  (dist={seed_dists[best_seed]:.3g})"
+            )
+        else:
+            print(
+                f"[post_seed_agg] Could not compute FDN representative seed "
+                f"(no overlapping metrics) under {seed_root}"
+            )
+    else:
+        print(f"[post_seed_agg] No IC-FDNet / LP-FDNet rows under {seed_root}")
 
-            # NLL / NLPD
-            if "nlpd_kde" in mtest and np.isfinite(mtest["nlpd_kde"]).any():
-                nll = float(np.nanmean(mtest["nlpd_kde"]))
-            elif "nlpd_hist" in mtest and np.isfinite(mtest["nlpd_hist"]).any():
-                nll = float(np.nanmean(mtest["nlpd_hist"]))
-            else:
-                nll = np.nan
-            nll_list.append(nll)
+    # ------------------------------------------------------------------
+    # 4) Scatter over seeds: MSE(OOD) vs Var(OOD)
+    # ------------------------------------------------------------------
+    if "MSE(OOD)" in df_all.columns and "Var(OOD)" in df_all.columns:
+        model_colors = {
+            "IC-FDNet": "#1f77b4",
+            "LP-FDNet": "#ff7f0e",
+            "BayesNet": "#2ca02c",
+            "GaussHyperNet": "#d62728",
+            "MLPDropoutNet": "#9467bd",
+            "DeepEnsembleNet": "#8c564b",
+        }
 
-            # CRPS
-            if "crps" in mtest and np.isfinite(mtest["crps"]).any():
-                crps_list.append(float(np.nanmean(mtest["crps"])))
-            else:
-                crps_list.append(np.nan)
-
-        mse_mean, mse_std = mean_std(mse_list)
-        nll_mean, nll_std = mean_std(nll_list)
-        crps_mean, crps_std = mean_std(crps_list)
-
-        rows.append(
-            {
-                "Model": model,
-                "MSE_mean": mse_mean,
-                "MSE_std": mse_std,
-                "NLL_mean": nll_mean,
-                "NLL_std": nll_std,
-                "CRPS_mean": crps_mean,
-                "CRPS_std": crps_std,
-            }
+        fig, ax = plt.subplots(
+            1, 1,
+            figsize=iclr_figsize(layout="double"),
+            dpi=DPI,
         )
 
-    df = pd.DataFrame(rows)
-    df = df.sort_values("MSE_mean")
+        for model, df_m in df_all.groupby("Model"):
+            ax.scatter(
+                df_m["Var(OOD)"],
+                df_m["MSE(OOD)"],
+                s=20,
+                alpha=0.6,
+                label=model,
+                color=model_colors.get(model, "0.4"),
+            )
 
-    # Output dir
-    out_dir = os.path.join(out_root, "real_analysis")
-    os.makedirs(out_dir, exist_ok=True)
-
-    if save_tables:
-        csv_path = os.path.join(out_dir, "real_data_metrics.csv")
-        df.to_csv(csv_path, index=False)
-        print(f"[real-analysis] saved metrics table to {csv_path}")
-
-    if save_plots:
-        # Simple bar plots with error bars for RMSE, NLL, CRPS
-        fig, axes = plt.subplots(
-            1, 3, figsize=(9.0, 3.0), dpi=150, sharex=False
-        )
-        metrics_specs = [
-            ("MSE_mean", "MSE_std", "MSE"),
-            ("NLL_mean", "NLL_std", "NLL"),
-            ("CRPS_mean", "CRPS_std", "CRPS"),
-        ]
-        idx = np.arange(len(df))
-
-        for ax, (m_mean, m_std, label) in zip(axes, metrics_specs):
-            vals = df[m_mean].values
-            errs = df[m_std].values
-            ax.bar(idx, vals, yerr=errs, capsize=3)
-            ax.set_title(label)
-            ax.set_xticks(idx)
-            ax.set_xticklabels(df["Model"].values, rotation=30, ha="right")
-            ax.grid(axis="y", alpha=0.3)
-
+        ax.set_xlabel("Var(OOD)")
+        ax.set_ylabel("MSE(OOD)")
+        ax.grid(alpha=0.3)
+        ax.legend(frameon=False, fontsize=8)
         fig.tight_layout()
-        save_plot(out_dir, "real_data_metrics_bars", dpi=150, fig=fig)
 
-    print("[real-analysis] done.")
+        out_fig = seed_root / "seed_agg_scatter_MSE_OOD_vs_Var_OOD.png"
+        fig.savefig(out_fig, dpi=DPI)
+        plt.close(fig)
+
+    print(f"[post_seed_agg] Aggregated {len(seed_dirs)} seeds under {seed_root}")
+
+
 
 # -----------------------------------------------------------------------------------
 # TRAINING DRIVER
@@ -1079,6 +1395,7 @@ def run_training_and_get_seed_dirs(args: argparse.Namespace) -> (str, list):
     # model list & seeds
     model_type = [m.strip() for m in args.models.split(",") if m.strip()]
     seeds = args.seeds
+    toy_func_seeds = args.toy_func_seeds
 
     # training save path
     save_path = make_save_path(args.results_root, args.exp_name, args.timestamp)
@@ -1087,28 +1404,64 @@ def run_training_and_get_seed_dirs(args: argparse.Namespace) -> (str, list):
     # run per-seed training
     for seed in seeds:
         print(f"\n[main] ==== Training seed {seed} ====")
-        exp = SingleTaskExperiment(
-            model_type=model_type,
-            seeds=[seed],
-            plot_dict=cfg["plot_dict"],
-            model_dict=cfg["model_dict"]
-        )
-        exp.run_experiments(
-            input_data_dict=input_data_dict,
-            epochs=cfg["epochs"],
-            beta_param_dict=cfg["cosine_beta_scheduler"],
-            checkpoint_dicts=cfg["checkpoint_dict"],
-            MC_train=cfg["MC_train"],
-            MC_val=cfg["MC_val"],
-            MC_test=cfg["MC_test"],
-            analysis=False,
-            save_switch=True,
-            save_path=save_path,
-            ensemble_epochs=cfg["ensemble_epochs"],
-        )
+        if args.dataset_mode == "toy":
+            for seed_function in toy_func_seeds:
+                save_path_toy_seed = os.path.join(save_path, f"toy_seed_{seed_function}")
+                exp = SingleTaskExperiment(
+                    model_type=model_type,
+                    seeds=[seed],
+                    plot_dict=cfg["plot_dict"],
+                    model_dict=cfg["model_dict"],
+                    seed_function=seed_function
+                )
+                exp.run_experiments(
+                    input_data_dict=input_data_dict,
+                    epochs=cfg["epochs"],
+                    beta_param_dict=cfg[args.beta_scheduler],
+                    checkpoint_dicts=cfg["checkpoint_dict"],
+                    MC_train=cfg["MC_train"],
+                    MC_val=cfg["MC_val"],
+                    MC_test=cfg["MC_test"],
+                    analysis=False,
+                    save_switch=True,
+                    save_path=save_path_toy_seed,
+                    ensemble_epochs=cfg["ensemble_epochs"],
+                )
+        else:
+                exp = SingleTaskExperiment(
+                    model_type=model_type,
+                    seeds=[seed],
+                    plot_dict=cfg["plot_dict"],
+                    model_dict=cfg["model_dict"]
+                )
+                exp.run_experiments(
+                    input_data_dict=input_data_dict,
+                    epochs=cfg["epochs"],
+                    beta_param_dict=cfg["linear_beta_scheduler"],
+                    checkpoint_dicts=cfg["checkpoint_dict"],
+                    MC_train=cfg["MC_train"],
+                    MC_val=cfg["MC_val"],
+                    MC_test=cfg["MC_test"],
+                    analysis=False,
+                    save_switch=True,
+                    save_path=save_path,
+                    ensemble_epochs=cfg["ensemble_epochs"],
+                )
+
 
     # return list of *seed dirs* (each contains model folders)
-    seed_dirs = [os.path.join(save_path, f"seed_{s}") for s in seeds]
+    if args.dataset_mode == "toy":
+        seed_dirs = [
+            os.path.join(save_path, f"toy_seed_{ts}", f"seed_{s}")
+            for s in seeds
+            for ts in toy_func_seeds
+        ]
+    else:
+        seed_dirs = [
+            os.path.join(save_path, f"seed_{s}")
+            for s in seeds
+        ]
+
     return save_path, seed_dirs
 
 
@@ -1118,32 +1471,48 @@ def run_training_and_get_seed_dirs(args: argparse.Namespace) -> (str, list):
 
 def main():
     args = parse_args()
-    debug_data = "npz"
-    if debug_data == "npz":
-        # ===== DEBUG RIG – TEMPORARY =====
-        args.mode = "train_and_analyze"          # train + analyze in one go
-        args.dataset_mode = "npz"                # NOT 'realdata' – choices are ['toy', 'npz']
+    # debug_data = "npz"
+    # if debug_data == "npz":
+    #     # ===== DEBUG RIG – TEMPORARY =====
+    #     args.mode = "train_and_analyze"          # train + analyze in one go
+    #     args.dataset_mode = "npz"                # NOT 'realdata' – choices are ['toy', 'npz']
 
-        args.data_path = os.path.join("data", "uci_npz", "airfoil_self_noise_feat_dim_0.npz")
-        args.exp_name = "airfoil_debug_cosine_beta_max_1"
+    #     run = 2
+    #     if run == 1:
+    #         args.data_path = os.path.join("data", "uci_npz", "airfoil_self_noise_feat_dim_0.npz")
+    #         args.exp_name = "airfoil_debug_linear_beta_max_1"
 
-        # args.data_path = os.path.join("data", "uci_npz", "energy_efficiency_heating_feat_dim_0.npz")
-        # args.exp_name = "energy_efficiency_heating_cosine_beta_max_0.01"
+    #     elif run == 2:
+    #         args.data_path = os.path.join("data", "uci_npz", "ccpp_power_plant_feat_dim_0.npz")
+    #         args.exp_name = "ccpp_power_plant_linear_beta_max_1"
 
-        args.analysis_type = "real"              # use the real-data analysis, not overlay
-        args.seeds = [7, 8]                         # or [0,1,2] etc. if parse_args allows list
-        # ==================================
-    elif debug_data == "toy":
-        # ===== DEBUG RIG – TEMPORARY (TOY TASK) =====
-        args.mode = "train_and_analyze"      # train + analyze in one go
-        args.dataset_mode = "toy"            # use toy generator
-        args.exp_name = "toy_debug_2epochs"  # results/single_task_experiment/toy_debug_2epochs
-        args.analysis_type = "overlay"       # 1D overlay analysis (default)
-        args.data_seed = 0                   # seed for x-grid / toy splits
-        args.seeds = [0]                     # training seed(s) = model + function seed for now
-        # Optionally restrict models while debugging:
-        # args.models = "IC_FDNet,LP_FDNet,BayesNet"
-        # ===========================================
+    #     elif run == 3:
+    #         args.data_path = os.path.join("data", "uci_npz", "energy_efficiency_heating_feat_dim_0.npz")
+    #         args.exp_name = "energy_efficiency_heating_linear_beta_max_1"
+
+    #     # args.data_path = os.path.join("data", "uci_npz", "energy_efficiency_heating_feat_dim_0.npz")
+    #     # args.exp_name = "energy_efficiency_heating_cosine_beta_max_0.01"
+
+    #     args.analysis_type = "real"              # use the real-data analysis, not overlay
+    #     args.seeds = [n for n in range(3,100)]                         # or [0,1,2] etc. if parse_args allows list
+    #     # ==================================
+    # elif debug_data == "toy":
+    #     # ===== DEBUG RIG – TEMPORARY (TOY TASK) =====
+    #     args.mode = "seed_agg"      # train + analyze in one go
+    #     args.dataset_mode = "toy"            # use toy generator
+    #     args.exp_name = "toy_run_linear_beta_max_1"          # results/single_task_experiment/args.exp_name
+    #     args.analysis_type = "overlay"       # 1D overlay analysis (default)
+    #     args.data_seed = 0                   # seed for x-grid / toy splits
+    #     args.toy_func_seeds = [24, 25, 26]      # seed for toy-function sampling
+    #     args.seeds = [n for n in range(18,20)]                      # training seed(s) = model + function seed for now
+    #     args.beta_scheduler = 'linear_beta_scheduler'
+    #     # Optionally restrict models while debugging:
+    #     # args.models = "IC_FDNet,LP_FDNet,BayesNet"
+    #     # ===========================================
+
+    if args.mode == "seed_agg":
+        post_seed_agg(args)
+        return
 
     # ------------------------------------------------------------------
     # Optional training phase
@@ -1199,6 +1568,8 @@ def main():
                     full = os.path.join(exp_root, name)
                     if os.path.isdir(full) and name.startswith("seed"):
                         seed_dirs.append(full)
+                    elif name.startswith("toy_seed"):
+                        seed_dirs = seed_dirs + [os.path.join(exp_root, name, name_sd) for name_sd in os.listdir(full)]
 
         if not seed_dirs:
             raise ValueError(
@@ -1221,7 +1592,7 @@ def main():
                 overlay_name = args.overlay_name if args.overlay_name is not None else seed_tag
 
                 run_overlay_analysis(
-                    seed_dir=[sd],
+                    seed_dir=sd,
                     out_root=sd,          # saves into that seed_* directory
                     overlay_name=overlay_name,
                     run_models=model_list,

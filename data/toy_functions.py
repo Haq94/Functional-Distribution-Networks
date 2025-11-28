@@ -3,7 +3,7 @@ import numpy as np
 import torch
 
 def sample_function(seed=None):
-    if seed:
+    if seed is not None:
         torch.manual_seed(seed)
         np.random.seed(seed)
         random.seed(seed)

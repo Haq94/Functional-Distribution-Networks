@@ -1,0 +1,17 @@
+name: fdn_env
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.10
+  - pytorch        # CPU or GPU build will be chosen based on your platform
+  - numpy
+  - scipy
+  - pandas
+  - matplotlib
+  - tqdm
+  - pip
+  # If you know you used any extra packages, add them here, e.g.:
+  # - seaborn
