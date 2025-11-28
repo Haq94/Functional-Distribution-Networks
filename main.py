@@ -76,8 +76,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--toy-func-seeds",
         type=int,
-        default=0,
-        help="Seed for toy function generation.",
+        nargs="+",
+        default=[24, 25, 26],
+        help="One or more seeds for toy function generation.",
     )
 
     # ---- experiment naming / saving ----
